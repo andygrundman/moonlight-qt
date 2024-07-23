@@ -1,0 +1,9 @@
+CoreAudioRenderer TODO
+----------------------
+Test the lower-quality surround modes that have coupled streams, is that broken on headphones or when spatialized?
+From https://people.xiph.org/~xiphmont/demo/opus/demo3.shtml
+
+    Surround masking takes advantage of cross-channel masking between free-field loudspeakers. Obviously, we can't do that for stereo, as stereo is often listened to on headphones or nearfield monitors, but for surround encodings played on typical surround placements with listeners placed well within the soundfield, there's considerable savings to be had by assuming freefield masking. We only need to make slight modifications to ensure that the encode still sounds good when downmixed to stereo for playback on non-surround systems.
+
+Refactor into more logical/cleaner C++ classes.
+Refactor audio stats code and implement for other backends.
