@@ -10,6 +10,10 @@ public:
 
     virtual bool prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* opusConfig) = 0;
 
+    virtual void updateMetrics() {
+        // optional
+    }
+
     virtual void* getAudioBuffer(int* size) = 0;
 
     // Return false if an unrecoverable error has occurred and the renderer must be reinitialized
