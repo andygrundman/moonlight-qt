@@ -1,0 +1,68 @@
+#pragma once
+
+#include <AudioToolbox/AudioToolbox.h>
+#include <SDL.h>
+
+// enable for verbose logging
+#define CA_DEBUG 1
+#ifdef CA_DEBUG
+# define DEBUG_TRACE(...) SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, __VA_ARGS__)
+#else
+# define DEBUG_TRACE(...)
+#endif
+
+static void CA_LogError(OSStatus error, const char *fmt, ...)
+{
+    char errorString[20];
+
+    // See if it appears to be a 4-char-code
+    *(uint32_t *)(errorString + 1) = CFSwapInt32HostToBig(error);
+    if (isprint(errorString[1]) && isprint(errorString[2]) &&
+        isprint(errorString[3]) && isprint(errorString[4])) {
+        errorString[0] = errorString[5] = '\'';
+        errorString[6] = '\0';
+    }
+    else {
+        // No, format it as an integer
+        snprintf(errorString, sizeof(errorString), "%d", (int)error);
+    }
+
+    char logBuffer[1024];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(logBuffer, sizeof(logBuffer), fmt, args);
+    va_end(args);
+
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "CoreAudio Error: %s (%s)\n", logBuffer, errorString);
+}
+
+static void CA_FourCC(uint32_t value, char *outFormatIDStr)
+{
+    uint32_t formatID = CFSwapInt32HostToBig(value);
+    bcopy(&formatID, outFormatIDStr, 4);
+    outFormatIDStr[4] = '\0';
+}
+
+// based on mpv ca_print_asbd()
+static void CA_PrintASBD(const char *description, const AudioStreamBasicDescription *asbd)
+{
+    char formatIDStr[5];
+    CA_FourCC(asbd->mFormatID, formatIDStr);
+
+    uint32_t flags  = asbd->mFormatFlags;
+    DEBUG_TRACE(
+        "%s %7.1fHz %" PRIu32 "bit %s "
+        "[%" PRIu32 "bpp][%" PRIu32 "fpp]"
+        "[%" PRIu32 "bpf][%" PRIu32 "ch] "
+        "%s %s %s%s%s%s\n",
+        description, asbd->mSampleRate, asbd->mBitsPerChannel, formatIDStr,
+        asbd->mBytesPerPacket, asbd->mFramesPerPacket,
+        asbd->mBytesPerFrame, asbd->mChannelsPerFrame,
+        (flags & kAudioFormatFlagIsFloat) ? "float" : "int",
+        (flags & kAudioFormatFlagIsBigEndian) ? "BE" : "LE",
+        (flags & kAudioFormatFlagIsFloat) ? ""
+            : ((flags & kAudioFormatFlagIsSignedInteger) ? "S" : "U"),
+        (flags & kAudioFormatFlagIsPacked) ? " packed" : "",
+        (flags & kAudioFormatFlagIsAlignedHigh) ? " aligned" : "",
+        (flags & kAudioFormatFlagIsNonInterleaved) ? " non-interleaved" : " interleaved");
+}

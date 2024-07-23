@@ -2,10 +2,32 @@
 
 #include <Limelight.h>
 #include <QtGlobal>
+#include <SDL.h>
+
+typedef struct _AUDIO_STATS {
+    uint32_t opusBytesReceived;
+    uint32_t totalPackets;
+    uint32_t networkDroppedPackets;
+    uint32_t fellBehindAndDroppedPackets;
+    uint32_t decodedPackets;
+    uint32_t renderedPackets;
+    uint32_t deviceOverloadCount;
+    uint32_t lastRtt;
+    uint32_t lastRttVariance;
+    uint32_t measurementStartTimestamp;
+    float opusBitsPerSec;
+    float packetsPerSec;
+} AUDIO_STATS, *PAUDIO_STATS;
 
 class IAudioRenderer
 {
 public:
+    IAudioRenderer() {
+        SDL_zero(m_ActiveWndAudioStats);
+        SDL_zero(m_LastWndAudioStats);
+        SDL_zero(m_GlobalAudioStats);
+    }
+
     virtual ~IAudioRenderer() {}
 
     virtual bool prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* opusConfig) = 0;
@@ -43,4 +65,22 @@ public:
             Q_UNREACHABLE();
         }
     }
+
+    AUDIO_STATS & getActiveWndAudioStats() {
+        return m_ActiveWndAudioStats;
+    }
+
+    // optional for backends wishing to report stats
+    virtual void snapshotAudioStats(AUDIO_STATS &) { return; }
+    virtual void addAudioStats(AUDIO_STATS &, AUDIO_STATS &) { return; }
+    virtual void stringifyAudioStats(AUDIO_STATS &, char *, int) { return; }
+    virtual void logGlobalAudioStats() { return; }
+    virtual void statsIncRenderedPackets() { return; }
+    virtual void statsAddOpusBytesReceived(int) { return; }
+    virtual void statsIncDeviceOverload() { return; }
+
+protected:
+    AUDIO_STATS m_ActiveWndAudioStats;
+    AUDIO_STATS m_LastWndAudioStats;
+    AUDIO_STATS m_GlobalAudioStats;
 };
