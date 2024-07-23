@@ -73,7 +73,12 @@ find $BUILD_FOLDER/app/Moonlight.app/ -name '*.dSYM' | xargs rm -rf
 
 if [ "$SIGNING_IDENTITY" != "" ]; then
   echo Signing app bundle
-  codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" $BUILD_FOLDER/app/Moonlight.app || fail "Signing failed!"
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements $SOURCE_ROOT/app/deploy/macos/spatial-audio.entitlements \
+    --sign "$SIGNING_IDENTITY" \
+    $BUILD_FOLDER/app/Moonlight.app || fail "Signing failed!"
+  echo "App signature:"
+  codesign -d --entitlements - -vvv $BUILD_FOLDER/app/Moonlight.app
 fi
 
 echo Creating DMG
@@ -90,11 +95,11 @@ fi
 
 if [ "$NOTARY_KEYCHAIN_PROFILE" != "" ]; then
   echo Uploading to App Notary service
-  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary submission failed"
+  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg || fail "Notary submission failed"
 
   echo Stapling notary ticket to DMG
-  xcrun stapler staple -v $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary ticket stapling failed!"
+  xcrun stapler staple -v $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg || fail "Notary ticket stapling failed!"
 fi
 
-mv $INSTALLER_FOLDER/Moonlight.dmg $INSTALLER_FOLDER/Moonlight-$VERSION.dmg
+mv $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg $INSTALLER_FOLDER/Moonlight-$VERSION.dmg
 echo Build successful

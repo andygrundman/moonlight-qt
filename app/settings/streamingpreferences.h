@@ -26,6 +26,13 @@ public:
     };
     Q_ENUM(AudioConfig)
 
+    enum SpatialAudioConfig
+    {
+        SAC_AUTO,
+        SAC_DISABLED
+    };
+    Q_ENUM(SpatialAudioConfig)
+
     enum VideoCodecConfig
     {
         VCC_AUTO,
@@ -140,6 +147,7 @@ public:
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool gameOptimizations MEMBER gameOptimizations NOTIFY gameOptimizationsChanged)
+    Q_PROPERTY(bool spatialHeadTracking MEMBER spatialHeadTracking NOTIFY spatialHeadTrackingChanged)
     Q_PROPERTY(bool playAudioOnHost MEMBER playAudioOnHost NOTIFY playAudioOnHostChanged)
     Q_PROPERTY(bool multiController MEMBER multiController NOTIFY multiControllerChanged)
     Q_PROPERTY(bool enableMdns MEMBER enableMdns NOTIFY enableMdnsChanged)
@@ -154,6 +162,7 @@ public:
     Q_PROPERTY(bool detectNetworkBlocking MEMBER detectNetworkBlocking NOTIFY detectNetworkBlockingChanged)
     Q_PROPERTY(bool showPerformanceOverlay MEMBER showPerformanceOverlay NOTIFY showPerformanceOverlayChanged)
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
+    Q_PROPERTY(SpatialAudioConfig spatialAudioConfig MEMBER spatialAudioConfig NOTIFY spatialAudioConfigChanged)
     Q_PROPERTY(VideoCodecConfig videoCodecConfig MEMBER videoCodecConfig NOTIFY videoCodecConfigChanged)
     Q_PROPERTY(bool enableHdr MEMBER enableHdr NOTIFY enableHdrChanged)
     Q_PROPERTY(bool enableYUV444 MEMBER enableYUV444 NOTIFY enableYUV444Changed)
@@ -187,6 +196,7 @@ public:
     bool autoAdjustBitrate;
     bool enableVsync;
     bool gameOptimizations;
+    bool spatialHeadTracking;
     bool playAudioOnHost;
     bool multiController;
     bool enableMdns;
@@ -208,6 +218,7 @@ public:
     bool keepAwake;
     int packetSize;
     AudioConfig audioConfig;
+    SpatialAudioConfig spatialAudioConfig;
     VideoCodecConfig videoCodecConfig;
     bool enableHdr;
     bool enableYUV444;
@@ -231,6 +242,7 @@ signals:
     void autoAdjustBitrateChanged();
     void enableVsyncChanged();
     void gameOptimizationsChanged();
+    void spatialHeadTrackingChanged();
     void playAudioOnHostChanged();
     void multiControllerChanged();
     void unsupportedFpsChanged();
@@ -239,6 +251,7 @@ signals:
     void absoluteMouseModeChanged();
     void absoluteTouchModeChanged();
     void audioConfigChanged();
+    void spatialAudioConfigChanged();
     void videoCodecConfigChanged();
     void enableHdrChanged();
     void enableYUV444Changed();
