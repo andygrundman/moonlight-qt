@@ -148,10 +148,12 @@ bool AUSpatialRenderer::setup(AUSpatialMixerOutputType outputType, float sampleR
             layout = kAudioChannelLayoutTag_Stereo;
             break;
         case 6:
-            layout = kAudioChannelLayoutTag_AudioUnit_5_1; // L R C LFE Ls Rs
+            // Back in the DVD era I remember 5.1 meant side surrounds (WAVE_5_1_A), but at some point it became back surrounds?
+            // layout = kAudioChannelLayoutTag_WAVE_5_1_A; // L R C LFE Ls Rs
+            layout = kAudioChannelLayoutTag_WAVE_5_1_B; // L R C LFE Rls Rrs
             break;
         case 8:
-            layout = kAudioChannelLayoutTag_AudioUnit_7_1; // L R C LFE Ls Rs Rls Rrs
+            layout = kAudioChannelLayoutTag_WAVE_7_1; // L R C LFE Rls Rrs Ls Rs
             break;
         case 12:
             layout = kAudioChannelLayoutTag_Atmos_7_1_4; // L R C LFE Ls Rs Rls Rrs Vhl Vhr Ltr Rtr
@@ -160,6 +162,8 @@ bool AUSpatialRenderer::setup(AUSpatialMixerOutputType outputType, float sampleR
             CA_LogError(-1, "Unsupported number of channels for spatial audio mixer: %d", inChannelCount);
             return false;
     }
+
+    // XXX Allow user to override channel layout
 
     status = setStreamFormatAndACL(sampleRate, layout, kAudioUnitScope_Input, 0);
     if (status != noErr) {
