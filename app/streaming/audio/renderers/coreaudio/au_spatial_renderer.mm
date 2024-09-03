@@ -1,6 +1,7 @@
 #import "au_spatial_renderer.h"
 #import "coreaudio_helpers.h"
 #import "AllocatedAudioBufferList.h"
+#include "settings/streamingpreferences.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <QtGlobal>
@@ -211,12 +212,14 @@ bool AUSpatialRenderer::setup(AUSpatialMixerOutputType outputType, float sampleR
         if (outputType == kSpatialMixerOutputType_Headphones) {
             // XXX: Both of these might require the builder to have a paid Apple developer account due to the use of entitlements.
 
-            // XXX Head-tracking doesn't work well currently, with audio glitches on my system. It's off by default pending a config option.
             // For devices that support it, enable head-tracking.
             // Apps that use low-latency head-tracking in iOS/tvOS need to set
             // the audio session category to ambient or run in Game Mode.
             // Head tracking requires the entitlement com.apple.developer.coremotion.head-pose.
-            if (0) {
+
+            // XXX Head-tracking may cause audio glitches. It's off by default.
+            StreamingPreferences *prefs = StreamingPreferences::get();
+            if (prefs->spatialHeadTracking) {
                 uint32_t ht = 1;
                 status = AudioUnitSetProperty(m_Mixer, kAudioUnitProperty_SpatialMixerEnableHeadTracking, kAudioUnitScope_Global, 0, &ht, sizeof(uint32_t));
                 if (status != noErr) {

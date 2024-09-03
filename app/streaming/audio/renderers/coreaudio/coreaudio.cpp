@@ -1,5 +1,6 @@
 #include "coreaudio.h"
 #include "coreaudio_helpers.h"
+#include "settings/streamingpreferences.h"
 
 #if TARGET_OS_OSX
 #include <IOKit/audio/IOAudioTypes.h>
@@ -151,8 +152,8 @@ void CoreAudioRenderer::stringifyAudioStats(AUDIO_STATS& stats, char *output, in
     snprintf(
         output, length,
         "Audio stream: %s-channel Opus low-delay @ 48 kHz\n"
-        "Output device: %s @ %.1f kHz, %u-channel\n"
-        "Render mode: %s, device type: %s %s, %s\n"
+        "Output device: %s @ %.1f kHz, %u-channel, %s %s\n"
+        "Render mode: %s %s\n"
         "Opus config: %s, frame size: %.1fms, bitrate: %dkbps\n"
         "Buffer: length: %0.1f packets (%.1fms), current %.1f%%\n"
         "Packet loss from network: %.2f%%, packets dropped due to resync: %.2f%%\n"
@@ -163,8 +164,6 @@ void CoreAudioRenderer::stringifyAudioStats(AUDIO_STATS& stats, char *output, in
         m_OutputDeviceName,
         m_OutputASBD.mSampleRate / 1000.0,
         m_OutputASBD.mChannelsPerFrame,
-
-        m_Spatial ? (m_SpatialAU.m_PersonalizedHRTF ? "personalized spatial" : "spatial") : "passthrough",
         !strcmp(m_OutputTransportType, "blue") ? "Bluetooth"
             : !strcmp(m_OutputTransportType, "bltn") ? "built-in"
             : !strcmp(m_OutputTransportType, "usb ") ? "USB"
@@ -175,7 +174,9 @@ void CoreAudioRenderer::stringifyAudioStats(AUDIO_STATS& stats, char *output, in
             : !strcmp(m_OutputDataSource, "ispk") ? "internal speakers"
             : !strcmp(m_OutputDataSource, "espk") ? "external speakers"
             : m_OutputDataSource,
-        m_Spatial && m_SpatialAU.m_HeadTracking ? "head-tracking: yes" : "",
+
+        m_Spatial ? (m_SpatialAU.m_PersonalizedHRTF ? "personalized spatial" : "spatial") : "passthrough",
+        m_Spatial && m_SpatialAU.m_HeadTracking ? "with head-tracking" : "",
 
         // Work out if we're getting high or low quality from Sunshine. coupled surround is designed for physical speakers
         ((m_opusConfig->channelCount == 2 && stats.opusBitsPerSec > 128) || !m_opusConfig->coupledStreams)
@@ -300,11 +301,17 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
 
     DEBUG_TRACE("CoreAudioRenderer getSpatialMixerOutputType = %d", outputType);
 
-    // XXX: let the user choose this if they want
     if (opusConfig->channelCount > 2) {
         if (outputType != kSpatialMixerOutputType_ExternalSpeakers) {
             m_Spatial = true;
         }
+    }
+
+    StreamingPreferences *prefs = StreamingPreferences::get();
+    if (prefs->spatialAudioConfig == StreamingPreferences::SAC_DISABLED) {
+        // User has disabled spatial audio
+        DEBUG_TRACE("CoreAudioRenderer user has disabled spatial audio");
+        m_Spatial = false;
     }
 
     // indicate the format our callback will provide samples in
