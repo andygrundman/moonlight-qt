@@ -3,6 +3,10 @@
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
 
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_metal.h"
+
 #include <Limelight.h>
 #include <SDL.h>
 #include "utils.h"
@@ -2005,6 +2009,17 @@ void Session::execInternal()
             continue;
         }
 #endif
+
+        if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData != nullptr) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ProcessEvent in thread %lu", SDL_GetThreadID(NULL));
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse || io.WantCaptureKeyboard) {
+                // XXX ImGUI has control of our inputs
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui captured keyboard/mouse");
+            }
+        }
+
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,

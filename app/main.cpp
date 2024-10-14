@@ -32,6 +32,9 @@
 #include <openssl/ssl.h>
 #endif
 
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+
 #include "cli/listapps.h"
 #include "cli/quitstream.h"
 #include "cli/startstream.h"
@@ -306,6 +309,24 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
 
 int main(int argc, char *argv[])
 {
+    // Setup ImGui
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui context in thread %lu", SDL_GetThreadID(NULL));
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable docking
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport / Platform Windows
+    ImGui::StyleColorsDark();
+
+    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+
     SDL_SetMainReady();
 
     // Set the app version for the QCommandLineParser's showVersion() command
@@ -800,6 +821,9 @@ int main(int argc, char *argv[])
     // Give worker tasks time to properly exit. Fixes PendingQuitTask
     // sometimes freezing and blocking process exit.
     QThreadPool::globalInstance()->waitForDone(30000);
+
+    // ImGui cleanup
+    ImGui::DestroyContext();
 
     // Wait for pending log messages to be printed
     s_LoggerThread.waitForDone();
