@@ -165,7 +165,7 @@ macx {
         CONFIG += discord-rpc
     }
 
-    LIBS += -lobjc -framework VideoToolbox -framework AVFoundation -framework CoreVideo -framework CoreGraphics -framework CoreMedia -framework AppKit -framework Metal -framework QuartzCore
+    LIBS += -lobjc -framework VideoToolbox -framework AVFoundation -framework CoreVideo -framework CoreGraphics -framework CoreMedia -framework AppKit -framework Metal -framework MetalKit -framework QuartzCore
 
     # For libsoundio
     LIBS += -framework CoreAudio -framework AudioUnit
@@ -190,6 +190,12 @@ SOURCES += \
     cli/listapps.cpp \
     cli/quitstream.cpp \
     cli/startstream.cpp \
+    $$PWD/../imgui/imgui/imgui.cpp \
+    $$PWD/../imgui/imgui/imgui_demo.cpp \
+    $$PWD/../imgui/imgui/imgui_draw.cpp \
+    $$PWD/../imgui/imgui/imgui_tables.cpp \
+    $$PWD/../imgui/imgui/imgui_widgets.cpp \
+    $$PWD/../imgui/imgui/backends/imgui_impl_sdl2.cpp \
     settings/compatfetcher.cpp \
     settings/mappingfetcher.cpp \
     settings/streamingpreferences.cpp \
@@ -233,6 +239,13 @@ HEADERS += \
     cli/listapps.h \
     cli/quitstream.h \
     cli/startstream.h \
+    $$PWD/../imgui/imgui/imconfig.h \
+    $$PWD/../imgui/imgui/imgui.h \
+    $$PWD/../imgui/imgui/imgui_internal.h \
+    $$PWD/../imgui/imgui/imstb_rectpack.h \
+    $$PWD/../imgui/imgui/imstb_textedit.h \
+    $$PWD/../imgui/imgui/imstb_truetype.h \
+    $$PWD/../imgui/imgui/backends/imgui_impl_sdl2.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
     streaming/session.h \
@@ -409,10 +422,12 @@ macx {
     SOURCES += \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
-        streaming/video/ffmpeg-renderers/vt_metal.mm
+        streaming/video/ffmpeg-renderers/vt_metal.mm \
+        $$PWD/../imgui/imgui/backends/imgui_impl_metal.mm
 
     HEADERS += \
-        streaming/video/ffmpeg-renderers/vt.h
+        streaming/video/ffmpeg-renderers/vt.h \
+        $$PWD/../imgui/imgui/backends/imgui_impl_metal.h
 }
 soundio {
     message(libsoundio audio renderer selected)
@@ -523,6 +538,8 @@ else:unix: LIBS += -L$$OUT_PWD/../h264bitstream/ -lh264bitstream
 
 INCLUDEPATH += $$PWD/../h264bitstream/h264bitstream
 DEPENDPATH += $$PWD/../h264bitstream/h264bitstream
+
+INCLUDEPATH += $$PWD/../imgui/imgui $$PWD/../imgui/imgui/backends
 
 !winrt {
     win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../AntiHooking/release/ -lAntiHooking

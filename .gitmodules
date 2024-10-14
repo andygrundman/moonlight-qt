@@ -1,6 +1,6 @@
 [submodule "moonlight-common-c/moonlight-common-c"]
 	path = moonlight-common-c/moonlight-common-c
-	url = https://github.com/moonlight-stream/moonlight-common-c.git
+	url = https://github.com/andygrundman/moonlight-common-c.git
 [submodule "qmdnsengine/qmdnsengine"]
 	path = qmdnsengine/qmdnsengine
 	url = https://github.com/cgutman/qmdnsengine.git
@@ -17,3 +17,6 @@
 	path = libs
 	url = https://github.com/cgutman/moonlight-qt-prebuilts.git
 	shallow = true
+[submodule "imgui/imgui"]
+	path = imgui/imgui
+	url = https://github.com/ocornut/imgui.git

@@ -3,6 +3,9 @@
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
 
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+
 #include <Limelight.h>
 #include <SDL.h>
 #include "utils.h"
@@ -562,6 +565,24 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
 
 bool Session::initialize()
 {
+    // Setup ImGui
+    // SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui::CreateContext in session thread %lu", SDL_GetThreadID(NULL));
+    // IMGUI_CHECKVERSION();
+    // ImGui::CreateContext();
+    // ImGuiIO& io = ImGui::GetIO(); (void)io;
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+    // //io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable docking
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport / Platform Windows
+    // ImGui::StyleColorsDark();
+
+    // // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    // ImGuiStyle& style = ImGui::GetStyle();
+    // if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+    //     style.WindowRounding = 0.0f;
+    //     style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    // }
+
 #ifdef Q_OS_DARWIN
     if (qEnvironmentVariableIntValue("I_WANT_BUGGY_FULLSCREEN") == 0) {
         // If we have a notch and the user specified one of the two native display modes
@@ -2005,6 +2026,17 @@ void Session::execInternal()
             continue;
         }
 #endif
+
+        if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData != nullptr) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ProcessEvent in thread %lu", SDL_GetThreadID(NULL));
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse || io.WantCaptureKeyboard) {
+                // XXX ImGUI has control of our inputs
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui captured keyboard/mouse");
+            }
+        }
+
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2356,6 +2388,9 @@ DispatchDeferredCleanup:
         }
 #endif
     }
+
+    // ImGui Cleanup
+    //ImGui::DestroyContext();
 
     // This must be called after the decoder is deleted, because
     // the renderer may want to interact with the window
