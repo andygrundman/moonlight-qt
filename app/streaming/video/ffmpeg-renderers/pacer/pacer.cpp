@@ -199,7 +199,7 @@ int Pacer::latencyThread(void* context)
     }
 
     // Make sure initialize() has been called
-    SDL_assert(m_MaxVideoFps != 0);
+    SDL_assert(me->m_MaxVideoFps != 0);
 
     Uint32 startTime = SDL_GetTicks();
     double releasePeriod = 1000.0 / me->m_MaxVideoFps;
