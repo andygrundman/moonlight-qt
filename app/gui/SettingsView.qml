@@ -844,7 +844,7 @@ Flickable {
 
                     stepSize: 1
                     from : 0
-                    to: 50
+                    to: 250
 
                     snapMode: "SnapOnRelease"
                     width: Math.min(minimumLatencyDesc.implicitWidth, parent.width)
@@ -1215,7 +1215,7 @@ Flickable {
                         ListElement {
                             text: qsTr("Maximized")
                             val: StreamingPreferences.UI_MAXIMIZED
-                        }   
+                        }
                         ListElement {
                             text: qsTr("Fullscreen")
                             val: StreamingPreferences.UI_FULLSCREEN

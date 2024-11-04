@@ -498,7 +498,7 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
 
     // Resolve --yuv444 and --no-yuv444 options
     preferences->enableYUV444 = parser.getToggleOptionValue("yuv444", preferences->enableYUV444);
-    
+
     // Resolve --capture-system-keys option
     if (parser.isSet("capture-system-keys")) {
         preferences->captureSysKeysMode = mapValue(m_CaptureSysKeysModeMap, parser.getChoiceOptionValue("capture-system-keys"));
@@ -516,8 +516,8 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
 
     if (parser.isSet("minimum-latency")) {
         preferences->minimumLatency = parser.getIntOption("minimum-latency");
-        if (!inRange(preferences->minimumLatency, 0, 50)) {
-            parser.showError("Minimum latency must be in range: 0 - 50");
+        if (!inRange(preferences->minimumLatency, 0, 250)) {
+            parser.showError("Minimum latency must be in range: 0 - 250");
         }
     }
 

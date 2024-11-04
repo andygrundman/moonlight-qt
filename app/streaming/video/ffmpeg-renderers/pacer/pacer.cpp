@@ -441,7 +441,11 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing, i
     }
 
     if (m_MinimumLatency > 0) {
-        m_MaxLatencyQueuedFrames = 3 + m_MinimumLatency * m_MaxVideoFps / 1000;
+        // be careful to retain precision and round correctly for cases such as 8ms @ 120fps (3.96 frames)
+        m_MaxLatencyQueuedFrames = (int)round(3 + (m_MinimumLatency * ((double)m_MaxVideoFps / 1000.0)));
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+            "WARNING: Minimum Latency enabled, video buffer duration: 3 frames + %dms (%d frames)",
+            m_MinimumLatency, m_MaxLatencyQueuedFrames);
         m_LatencyThread = SDL_CreateThread(Pacer::latencyThread, "PacerLatency", this);
     }
 
