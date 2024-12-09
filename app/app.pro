@@ -196,6 +196,9 @@ SOURCES += \
     $$PWD/../imgui/imgui/imgui_tables.cpp \
     $$PWD/../imgui/imgui/imgui_widgets.cpp \
     $$PWD/../imgui/imgui/backends/imgui_impl_sdl2.cpp \
+    $$PWD/../imgui/implot/implot.cpp \
+    $$PWD/../imgui/implot/implot_items.cpp \
+    $$PWD/../imgui/implot/implot_demo.cpp \
     settings/compatfetcher.cpp \
     settings/mappingfetcher.cpp \
     settings/streamingpreferences.cpp \
@@ -246,6 +249,9 @@ HEADERS += \
     $$PWD/../imgui/imgui/imstb_textedit.h \
     $$PWD/../imgui/imgui/imstb_truetype.h \
     $$PWD/../imgui/imgui/backends/imgui_impl_sdl2.h \
+    $$PWD/../imgui/implot/implot.h \
+    $$PWD/../imgui/implot/implot_internal.h \
+    streaming/video/imgui_lock.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
     streaming/session.h \
@@ -539,7 +545,7 @@ else:unix: LIBS += -L$$OUT_PWD/../h264bitstream/ -lh264bitstream
 INCLUDEPATH += $$PWD/../h264bitstream/h264bitstream
 DEPENDPATH += $$PWD/../h264bitstream/h264bitstream
 
-INCLUDEPATH += $$PWD/../imgui/imgui $$PWD/../imgui/imgui/backends
+INCLUDEPATH += $$PWD/../imgui/imgui $$PWD/../imgui/imgui/backends $$PWD/../imgui/implot
 
 !winrt {
     win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../AntiHooking/release/ -lAntiHooking

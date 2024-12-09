@@ -2027,14 +2027,11 @@ void Session::execInternal()
         }
 #endif
 
-        if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData != nullptr) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ProcessEvent in thread %lu", SDL_GetThreadID(NULL));
+        // let ImGui read keyboard/mouse events. If interacting with a UI element, we will check
+        // io.WantCaptureMouse and io.WantCaptureKeyboard below
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::GetCurrentContext() && io.BackendPlatformUserData != nullptr) {
             ImGui_ImplSDL2_ProcessEvent(&event);
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureMouse || io.WantCaptureKeyboard) {
-                // XXX ImGUI has control of our inputs
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui captured keyboard/mouse");
-            }
         }
 
         switch (event.type) {
@@ -2286,18 +2283,18 @@ void Session::execInternal()
         case SDL_KEYUP:
         case SDL_KEYDOWN:
             presence.runCallbacks();
-            m_InputHandler->handleKeyEvent(&event.key);
+            if (!io.WantCaptureKeyboard) m_InputHandler->handleKeyEvent(&event.key);
             break;
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
             presence.runCallbacks();
-            m_InputHandler->handleMouseButtonEvent(&event.button);
+            if (!io.WantCaptureMouse) m_InputHandler->handleMouseButtonEvent(&event.button);
             break;
         case SDL_MOUSEMOTION:
-            m_InputHandler->handleMouseMotionEvent(&event.motion);
+            if (!io.WantCaptureMouse) m_InputHandler->handleMouseMotionEvent(&event.motion);
             break;
         case SDL_MOUSEWHEEL:
-            m_InputHandler->handleMouseWheelEvent(&event.wheel);
+            if (!io.WantCaptureMouse) m_InputHandler->handleMouseWheelEvent(&event.wheel);
             break;
         case SDL_CONTROLLERAXISMOTION:
             m_InputHandler->handleControllerAxisEvent(&event.caxis);

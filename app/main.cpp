@@ -34,6 +34,7 @@
 
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
+#include "implot.h"
 
 #include "cli/listapps.h"
 #include "cli/quitstream.h"
@@ -310,14 +311,17 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
 int main(int argc, char *argv[])
 {
     // Setup ImGui
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui context in thread %lu", SDL_GetThreadID(NULL));
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
+    // io.Fonts->AddFontFromFileTTF(Path::readDataFile("ModeSeven.ttf"), 20);
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+#ifdef IMGUI_DEBUG_LOG_DOCKING
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable docking
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport / Platform Windows
+#endif
     ImGui::StyleColorsDark();
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
@@ -823,6 +827,7 @@ int main(int argc, char *argv[])
     QThreadPool::globalInstance()->waitForDone(30000);
 
     // ImGui cleanup
+    ImPlot::DestroyContext();
     ImGui::DestroyContext();
 
     // Wait for pending log messages to be printed

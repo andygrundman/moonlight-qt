@@ -2,6 +2,10 @@
 #include "ffmpeg.h"
 #include "streaming/session.h"
 
+#include "imgui.h"
+#include "streaming/video/imgui_lock.h"
+SDL_SpinLock g_ImGuiLock = 0;
+
 #include <h264_stream.h>
 
 extern "C" {
@@ -239,6 +243,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
     SDL_zero(m_ActiveWndVideoStats);
     SDL_zero(m_LastWndVideoStats);
     SDL_zero(m_GlobalVideoStats);
+    SDL_zero(m_ImPlotWndVideoStats);
 
     SDL_AtomicSet(&m_DecoderThreadShouldQuit, 0);
 
@@ -510,6 +515,9 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
     // Stash a pointer to this object in the context
     SDL_assert(m_VideoDecoderCtx->opaque == nullptr);
     m_VideoDecoderCtx->opaque = this;
+
+    // Stash a pointer to the stats for use by backend renderer's graphs
+    m_BackendRenderer->setVideoStatsRef(&m_ImPlotWndVideoStats);
 
     int err = avcodec_open2(m_VideoDecoderCtx, decoder, &options);
     av_dict_free(&options);
@@ -1785,14 +1793,19 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     }
 
     // Flip stats windows roughly every second
-    if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 1000000) {
+    //if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 1000000) {
+    if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 10000) {
         // Update overlay stats if it's enabled
         if (Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug)) {
-            VIDEO_STATS lastTwoWndStats = {};
-            addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
-            addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
+            // VIDEO_STATS lastTwoWndStats = {};
+            // addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
+            // addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
 
-            stringifyVideoStats(lastTwoWndStats,
+            SDL_zero(m_ImPlotWndVideoStats);
+            addVideoStats(m_LastWndVideoStats, m_ImPlotWndVideoStats);
+            addVideoStats(m_ActiveWndVideoStats, m_ImPlotWndVideoStats);
+
+            stringifyVideoStats(m_ImPlotWndVideoStats,
                                 Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
                                 Session::get()->getOverlayManager().getOverlayMaxTextLength());
             Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);

@@ -99,6 +99,7 @@ private:
     VIDEO_STATS m_ActiveWndVideoStats;
     VIDEO_STATS m_LastWndVideoStats;
     VIDEO_STATS m_GlobalVideoStats;
+    VIDEO_STATS m_ImPlotWndVideoStats;
 
     int m_FramesIn;
     int m_FramesOut;

@@ -2,12 +2,15 @@
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
+#include "streaming/video/ffmpeg.h"
 #include "pacer/pacer.h"
 #undef AVMediaType
 
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_metal.h"
+#include "implot.h"
+#include "streaming/video/imgui_lock.h"
 
 #include <SDL_syswm.h>
 #include <Limelight.h>
@@ -112,6 +115,32 @@ struct Vertex
 };
 
 #define MAX_VIDEO_PLANES 3
+
+// utility structure for realtime plot
+struct ScrollingBuffer {
+    int MaxSize;
+    int Offset;
+    ImVector<ImVec2> Data;
+    ScrollingBuffer(int max_size = 2000) {
+        MaxSize = max_size;
+        Offset  = 0;
+        Data.reserve(MaxSize);
+    }
+    void AddPoint(float x, float y) {
+        if (Data.size() < MaxSize)
+            Data.push_back(ImVec2(x,y));
+        else {
+            Data[Offset] = ImVec2(x,y);
+            Offset =  (Offset + 1) % MaxSize;
+        }
+    }
+    void Erase() {
+        if (Data.size() > 0) {
+            Data.shrink(0);
+            Offset  = 0;
+        }
+    }
+};
 
 class VTMetalRenderer : public VTBaseRenderer
 {
@@ -591,101 +620,131 @@ public:
         [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
-        // Now draw any overlays that are enabled
-        for (int i = 0; i < Overlay::OverlayMax; i++) {
-            id<MTLTexture> overlayTexture = nullptr;
+        // ImGui start of frame
+        bool show_imgui_overlay = Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug);
 
-            // Try to acquire a reference on the overlay texture
-            SDL_AtomicLock(&m_OverlayLock);
-            overlayTexture = [m_OverlayTextures[i] retain];
-            SDL_AtomicUnlock(&m_OverlayLock);
-
-            if (overlayTexture) {
-                SDL_FRect renderRect = {};
-                if (i == Overlay::OverlayStatusUpdate) {
-                    // Bottom Left
-                    renderRect.x = 0;
-                    renderRect.y = 0;
-                }
-                else if (i == Overlay::OverlayDebug) {
-                    // Top left
-                    renderRect.x = 0;
-                    renderRect.y = m_LastDrawableHeight - overlayTexture.height;
-                }
-                else if (i == Overlay::OverlayDebugAudio) {
-                    // Top right
-                    renderRect.x = m_LastDrawableWidth - overlayTexture.width;
-                    renderRect.y = m_LastDrawableHeight - overlayTexture.height;
-                }
-
-                renderRect.w = overlayTexture.width;
-                renderRect.h = overlayTexture.height;
-
-                // Convert screen space to normalized device coordinates
-                StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_LastDrawableWidth, m_LastDrawableHeight);
-
-                Vertex verts[] =
-                {
-                    { { renderRect.x, renderRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
-                    { { renderRect.x, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
-                    { { renderRect.x+renderRect.w, renderRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
-                    { { renderRect.x+renderRect.w, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
-                };
-
-                [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
-                [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
-                [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
-                [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
-
-                [overlayTexture release];
-            }
-        }
-
-        // ImGui
-        bool show_demo_window = true;
-        bool show_another_window = false;
-        ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
+        SDL_AtomicLock(&g_ImGuiLock);
         ImGui_ImplMetal_NewFrame(renderPassDescriptor);
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
-        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
+        // Now draw any overlays that are enabled
+        if (show_imgui_overlay) {
+            // render the overlay data in an ImGui window
+            char videoOverlayText[1024];
 
-        // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
-        {
-            static float f = 0.0f;
-            static int counter = 0;
+            //ImPlot::ShowDemoWindow();
 
-            ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+            const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(ImVec2(main_viewport->WorkPos.x + 100, main_viewport->WorkPos.y + 100), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(550, 600), ImGuiCond_FirstUseEver);
 
-            ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
-            ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-            ImGui::Checkbox("Another Window", &show_another_window);
+            if (ImGui::Begin("Video Stats")) {
+                strncpy(videoOverlayText,
+                        Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
+                        Session::get()->getOverlayManager().getOverlayMaxTextLength());
+                //ImGui::TextUnformatted(videoOverlayText);
 
-            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-            ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
+                static ScrollingBuffer sFPS, sBitrate, sDecode, sHost, sPing, sLoss;
+                static float history = 10.0f;
+                static float t = 0;
+                t += ImGui::GetIO().DeltaTime;
 
-            if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                counter++;
-            ImGui::SameLine();
-            ImGui::Text("counter = %d", counter);
+                sFPS.AddPoint(t, m_VideoStats->totalFps);
+                sBitrate.AddPoint(t, m_VideoStats->videoMegabitsPerSec);
+                sDecode.AddPoint(t, (double)(m_VideoStats->totalDecodeTimeUs / 1000.0) / m_VideoStats->decodedFrames);
+                sHost.AddPoint(t, (double)m_VideoStats->totalHostProcessingLatency / 10.0 / m_VideoStats->framesWithHostProcessingLatency);
+                sPing.AddPoint(t, m_VideoStats->lastRtt);
+                sLoss.AddPoint(t, (double)m_VideoStats->networkDroppedFrames / m_VideoStats->totalFrames * 100);
 
-            ImGuiIO& io = ImGui::GetIO();
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                // const RTP_VIDEO_STATS* rtpVideoStats = LiGetRTPVideoStats();
+                // float fecOverhead = (float)rtpVideoStats->packetCountFec * 1.0 / (rtpVideoStats->packetCountVideo + rtpVideoStats->packetCountFec);
+                // sdata2.AddPoint(t, fecOverhead);
+
+                if (ImPlot::BeginPlot("##Scrolling", ImVec2(-1,150))) {
+                    ImPlot::SetupAxes("Time",nullptr, 0, ImPlotAxisFlags_AutoFit);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, t - history, t, ImGuiCond_Always);
+
+                    ImPlot::PushStyleVar(ImPlotStyleVar_FillAlpha, 0.25f);
+                    ImPlot::PlotShaded("Decode", &sDecode.Data[0].x, &sDecode.Data[0].y, sDecode.Data.size(), -INFINITY, 0, sDecode.Offset, 2 * sizeof(float));
+                    ImPlot::PopStyleVar();
+                    ImPlot::PlotLine("Decode", &sDecode.Data[0].x, &sDecode.Data[0].y, sDecode.Data.size(), 0, sDecode.Offset, 2 * sizeof(float));
+
+                    ImPlot::PushStyleVar(ImPlotStyleVar_FillAlpha, 0.25f);
+                    ImPlot::PlotShaded("Host Encode", &sHost.Data[0].x, &sHost.Data[0].y, sHost.Data.size(), -INFINITY, 0, sHost.Offset, 2 * sizeof(float));
+                    ImPlot::PopStyleVar();
+                    ImPlot::PlotLine("Host Encode", &sHost.Data[0].x, &sHost.Data[0].y, sHost.Data.size(), 0, sHost.Offset, 2 * sizeof(float));
+
+                    ImPlot::PushStyleVar(ImPlotStyleVar_FillAlpha, 0.25f);
+                    ImPlot::PlotShaded("Ping", &sPing.Data[0].x, &sPing.Data[0].y, sPing.Data.size(), -INFINITY, 0, sPing.Offset, 2 * sizeof(float));
+                    ImPlot::PopStyleVar();
+                    ImPlot::PlotLine("Ping", &sPing.Data[0].x, &sPing.Data[0].y, sPing.Data.size(), 0, sPing.Offset, 2 * sizeof(float));
+                    ImPlot::EndPlot();
+                }
+
+                if (ImPlot::BeginPlot("##FPS", ImVec2(-1,150))) {
+                    ImPlot::SetupAxes("Time","FPS", 0, ImPlotAxisFlags_AutoFit);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, t - history, t, ImGuiCond_Always);
+
+                    ImPlot::PushStyleVar(ImPlotStyleVar_FillAlpha, 0.25f);
+                    ImPlot::PlotShaded("FPS", &sFPS.Data[0].x, &sFPS.Data[0].y, sFPS.Data.size(), -INFINITY, 0, sFPS.Offset, 2 * sizeof(float));
+                    ImPlot::PopStyleVar();
+                    ImPlot::PlotLine("FPS", &sFPS.Data[0].x, &sFPS.Data[0].y, sFPS.Data.size(), 0, sFPS.Offset, 2 * sizeof(float));
+                    ImPlot::EndPlot();
+                }
+            }
             ImGui::End();
         }
+        else {
+            // display overlay as SDL texture
+            for (int i = 0; i < Overlay::OverlayMax; i++) {
+                id<MTLTexture> overlayTexture = nullptr;
 
-        // 3. Show another simple window.
-        if (show_another_window)
-        {
-            ImGui::Begin("Another Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
-            ImGui::Text("Hello from another window!");
-            if (ImGui::Button("Close Me"))
-                show_another_window = false;
-            ImGui::End();
+                // Try to acquire a reference on the overlay texture
+                SDL_AtomicLock(&m_OverlayLock);
+                overlayTexture = [m_OverlayTextures[i] retain];
+                SDL_AtomicUnlock(&m_OverlayLock);
+
+                if (overlayTexture) {
+                    SDL_FRect renderRect = {};
+                    if (i == Overlay::OverlayStatusUpdate) {
+                        // Bottom Left
+                        renderRect.x = 0;
+                        renderRect.y = 0;
+                    }
+                    else if (i == Overlay::OverlayDebug) {
+                        // Top left
+                        renderRect.x = 0;
+                        renderRect.y = m_LastDrawableHeight - overlayTexture.height;
+                    }
+                    else if (i == Overlay::OverlayDebugAudio) {
+                        // Top right
+                        renderRect.x = m_LastDrawableWidth - overlayTexture.width;
+                        renderRect.y = m_LastDrawableHeight - overlayTexture.height;
+                    }
+
+                    renderRect.w = overlayTexture.width;
+                    renderRect.h = overlayTexture.height;
+
+                    // Convert screen space to normalized device coordinates
+                    StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_LastDrawableWidth, m_LastDrawableHeight);
+
+                    Vertex verts[] =
+                    {
+                        { { renderRect.x, renderRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+                        { { renderRect.x, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
+                        { { renderRect.x+renderRect.w, renderRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
+                        { { renderRect.x+renderRect.w, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
+                    };
+
+                    [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
+                    [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
+                    [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
+                    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
+
+                    [overlayTexture release];
+                }
+            }
         }
 
         ImGui::Render();
@@ -696,6 +755,8 @@ public:
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
         }
+
+        SDL_AtomicUnlock(&g_ImGuiLock);
         // End ImGui
 
         [renderEncoder endEncoding];
@@ -822,7 +883,6 @@ public:
         m_MetalLayer.displaySyncEnabled = params->enableVsync;
 
         // Setup ImGUI
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "ImGui InitForMetal in thread %lu", SDL_GetThreadID(NULL));
         ImGui_ImplMetal_Init(m_MetalLayer.device);
         ImGui_ImplSDL2_InitForMetal(m_Window);
 

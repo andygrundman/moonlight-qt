@@ -278,6 +278,10 @@ public:
         // Nothing
     }
 
+    virtual void setVideoStatsRef(const PVIDEO_STATS videoStats) {
+        m_VideoStats = videoStats;
+    }
+
 #ifdef HAVE_EGL
     // By default we can't do EGL
     virtual bool canExportEGL() {
@@ -315,4 +319,7 @@ public:
 
     virtual void unmapDrmPrimeFrame(AVDRMFrameDescriptor*) {}
 #endif
+
+protected:
+    PVIDEO_STATS m_VideoStats;
 };
