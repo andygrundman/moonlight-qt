@@ -823,6 +823,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 
     if (stats.receivedFps > 0) {
         if (m_VideoDecoderCtx != nullptr) {
+            // This block does not print a summary at exit
             ret = snprintf(&output[offset],
                            length - offset,
                            "Video stream: %dx%d %.2f FPS (Codec: %s)\n",
@@ -838,11 +839,22 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
             offset += ret;
         }
 
+        double avgVideoMbps = m_bwTracker.getAverageMbps();
+        double peakVideoMbps = m_bwTracker.getPeakMbps();
+        const RTP_VIDEO_STATS* rtpVideoStats = LiGetRTPVideoStats();
+        double fecOverhead = (double)rtpVideoStats->packetCountFec * 1.0 / (rtpVideoStats->packetCountVideo + rtpVideoStats->packetCountFec);
+        double fecMbps = avgVideoMbps * fecOverhead;
+
         ret = snprintf(&output[offset],
                        length - offset,
+                       "Bitrate: %.1f Mbps (%.1f/%.1f video/FEC) Peak (30s): %.1f\n"
                        "Incoming frame rate from network: %.2f FPS\n"
                        "Decoding frame rate: %.2f FPS\n"
                        "Rendering frame rate: %.2f FPS\n",
+                       avgVideoMbps + fecMbps,
+                       avgVideoMbps,
+                       fecMbps,
+                       peakVideoMbps + (peakVideoMbps * fecOverhead),
                        stats.receivedFps,
                        stats.decodedFps,
                        stats.renderedFps);
@@ -905,7 +917,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 void FFmpegVideoDecoder::logVideoStats(VIDEO_STATS& stats, const char* title)
 {
     if (stats.renderedFps > 0 || stats.renderedFrames != 0) {
-        char videoStatsStr[512];
+        char videoStatsStr[1024];
         stringifyVideoStats(stats, videoStatsStr, sizeof(videoStatsStr));
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -1826,6 +1838,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         // Any frame number greater than m_LastFrameNumber + 1 represents a dropped frame
         m_ActiveWndVideoStats.networkDroppedFrames += du->frameNumber - (m_LastFrameNumber + 1);
         m_ActiveWndVideoStats.totalFrames += du->frameNumber - (m_LastFrameNumber + 1);
+        m_bwTracker.addBytes(du->fullLength);
         m_LastFrameNumber = du->frameNumber;
     }
 
