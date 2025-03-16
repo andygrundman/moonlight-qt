@@ -42,17 +42,6 @@ COMMON_C_DIR = $$PWD/moonlight-common-c
 ENET_DIR = $$COMMON_C_DIR/enet
 RS_DIR = $$COMMON_C_DIR/nanors
 
-# https://stackoverflow.com/questions/27683777/how-can-i-specify-compiler-flags-to-a-single-source-file-with-qmake
-# Compile RS code with -ftree-vectorize -funroll-loops
-SOURCES_RS_OPTIMIZE = $$COMMON_C_DIR/src/rswrapper.c
-rs_optimize.name = rs_optimize
-rs_optimize.input = SOURCES_RS_OPTIMIZE
-rs_optimize.dependency_type = TYPE_C
-rs_optimize.variable_out = OBJECTS
-rs_optimize.output = ${QMAKE_VAR_OBJECTS_DIR}${QMAKE_FILE_IN_BASE}$${first(QMAKE_EXT_OBJ)}
-rs_optimize.commands = $${QMAKE_CC} $(CFLAGS) $${QMAKE_CFLAGS} $(INCPATH) -ftree-vectorize -funroll-loops -c ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
-QMAKE_EXTRA_COMPILERS += rs_optimize
-
 SOURCES += \
     $$ENET_DIR/callbacks.c \
     $$ENET_DIR/compress.c \
@@ -83,6 +72,26 @@ SOURCES += \
     $$COMMON_C_DIR/src/SimpleStun.c \
     $$COMMON_C_DIR/src/VideoDepacketizer.c \
     $$COMMON_C_DIR/src/VideoStream.c
+
+
+msvc {
+    # Builds AVX2 and SSE3 variants of reed_solomon
+    SOURCES += $$COMMON_C_DIR/src/rswrapper.c
+}
+!msvc {
+    # https://stackoverflow.com/questions/27683777/how-can-i-specify-compiler-flags-to-a-single-source-file-with-qmake
+    # reed_solomon AVX512, AVX2, SSE3 (x86) or ARM NEON
+    # This block is to add custom CFLAGS -ftree-vectorize -funroll-loops
+    SOURCES_RS_OPTIMIZE = $$COMMON_C_DIR/src/rswrapper.c
+    rs_optimize.name = rs_optimize
+    rs_optimize.input = SOURCES_RS_OPTIMIZE
+    rs_optimize.dependency_type = TYPE_C
+    rs_optimize.variable_out = OBJECTS
+    rs_optimize.output = ${QMAKE_VAR_OBJECTS_DIR}${QMAKE_FILE_IN_BASE}${QMAKE_FILE_OUT_BASE}$${first(QMAKE_EXT_OBJ)}
+    rs_optimize.commands = $${QMAKE_CC} $(CFLAGS) $${QMAKE_CFLAGS} $(INCPATH) -ftree-vectorize -funroll-loops -c ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
+    QMAKE_EXTRA_COMPILERS += rs_optimize
+}
+
 HEADERS += \
     $$COMMON_C_DIR/src/Limelight.h
 INCLUDEPATH += \
