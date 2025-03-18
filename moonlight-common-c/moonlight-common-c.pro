@@ -75,7 +75,7 @@ SOURCES += \
 
 
 msvc {
-    # Builds AVX2 and SSE3 variants of reed_solomon
+    # This file builds normally on MSVC, but is in this block so that other compilers can customize it
     SOURCES += $$COMMON_C_DIR/src/rswrapper.c
 }
 !msvc {
