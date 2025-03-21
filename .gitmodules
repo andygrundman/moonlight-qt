@@ -1,7 +1,7 @@
 [submodule "moonlight-common-c/moonlight-common-c"]
 	path = moonlight-common-c/moonlight-common-c
 	url = https://github.com/andygrundman/moonlight-common-c.git
-	branch = andyg.nanors
+	branch = andyg.common-c-nanors
 [submodule "qmdnsengine/qmdnsengine"]
 	path = qmdnsengine/qmdnsengine
 	url = https://github.com/cgutman/qmdnsengine.git
