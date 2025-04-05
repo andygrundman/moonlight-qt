@@ -43,7 +43,7 @@ jobs:
         run: |
           Set-PSDebug -Trace 1
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
-          scripts\build-arch.bat Release
+          scripts\build-arch2.bat Release x64
           mkdir artifacts
           Copy-Item "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
           Copy-Item "build\symbols-x64-Release\MoonlightDebuggingSymbols-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
@@ -67,7 +67,7 @@ jobs:
           Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\target_qt.conf" -Destination "$($env:QT_ROOT_DIR)\bin"
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
-          scripts\build-arch.bat Release
+          scripts\build-arch2.bat Release arm64
           Copy-Item "build\installer-arm64-release\MoonlightPortable-arm64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-arm64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
           Copy-Item "build\symbols-arm64-Release\MoonlightDebuggingSymbols-arm64-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-arm64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
           Get-ChildItem -Path "artifacts" -Recurse
