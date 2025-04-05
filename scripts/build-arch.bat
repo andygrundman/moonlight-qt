@@ -33,10 +33,7 @@ if /I "%BUILD_CONFIG%"=="debug" (
     )
 )
 
-echo GITHUB_ENV is %GITHUB_ENV%
-type %GITHUB_ENV%
-
-echo OLDPATH is set to %OLDPATH%
+echo HTAP is set to %HTAP%
 
 echo Running with PATH=%PATH%
 

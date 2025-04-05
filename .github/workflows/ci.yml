@@ -36,13 +36,13 @@ jobs:
           echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
           echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
-          echo ("OLDPATH=" + $env.PATH) >> $env.GITHUB_ENV
+          echo ("HTAP=" + $env.PATH) >> $env.GITHUB_ENV
 
       - name: Build Windows x64
         shell: pwsh
         run: |
-          echo "$($env.OLDPATH)"
-          $env:PATH = "$($env:QT_ROOT_DIR)\bin;$($env:OLDPATH)"
+          echo "$($env.HTAP)"
+          $env:PATH = "$($env:QT_ROOT_DIR)\bin;$($env:HTAP)"
           scripts\build-arch.bat Release
           mkdir artifacts
           Copy-Item "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
