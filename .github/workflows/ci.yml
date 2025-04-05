@@ -33,7 +33,6 @@ jobs:
 
       - name: Setup metadata
         run: |
-          Set-PSDebug -Trace 1
           echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
           echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
@@ -41,7 +40,6 @@ jobs:
       - name: Build Windows x64
         shell: pwsh
         run: |
-          Set-PSDebug -Trace 1
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
           scripts\build-arch.bat Release x64
           mkdir artifacts
@@ -62,11 +60,9 @@ jobs:
       - name: Build Windows arm64
         shell: pwsh
         run: |
-          Set-PSDebug -Trace 1
           Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\target_qt.conf" -Destination "$($env:QT_ROOT_DIR)\bin"
-          echo ("QTDIR=" + $env:QT_ROOT_DIR.replace('\msvc2022_arm64', '')) >> $env:GITHUB_ENV
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
           scripts\build-arch.bat Release arm64
           Copy-Item "build\installer-arm64-release\MoonlightPortable-arm64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-arm64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
@@ -76,7 +72,6 @@ jobs:
       - name: Build universal binary
         shell: pwsh
         run: |
-          Set-PSDebug -Trace 1
           scripts\generate-bundle.bat Release
           Copy-Item "build\installer-release\MoonlightSetup-$($env.VERSION).exe" -Destination "artifacts\MoonlightSetup-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).exe"
           Get-ChildItem -Path "artifacts" -Recurse
