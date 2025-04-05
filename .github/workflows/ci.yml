@@ -41,7 +41,9 @@ jobs:
       - name: Build Windows x64
         shell: pwsh
         run: |
-          $env:PATH = "$($env:OLDPATH);$($env:QT_ROOT_DIR)\bin"
+          Get-Content $env.GITHUB_ENV
+          echo "$($env.OLDPATH)"
+          $env:PATH = "$($env:QT_ROOT_DIR)\bin;$($env:OLDPATH)"
           scripts\build-arch.bat Release
           mkdir artifacts
           Copy-Item "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
