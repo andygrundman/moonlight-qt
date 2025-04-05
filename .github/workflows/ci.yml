@@ -62,7 +62,7 @@ jobs:
         run: |
           Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
-          Copy-Item "scripts\appveyor\target_qt.conf -Destination "$($env:QT_ROOT_DIR)\bin"
+          Copy-Item "scripts\appveyor\target_qt.conf" -Destination "$($env:QT_ROOT_DIR)\bin"
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
           scripts\build-arch.bat Release
           mkdir artifacts
