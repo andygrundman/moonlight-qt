@@ -85,3 +85,40 @@ jobs:
         with:
           name: moonlight-windows
           path: artifacts/
+
+  build_macos:
+    name: macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          arch: clang_64
+          host: mac
+          setup-python: false
+          target: desktop
+          version: '6.8.*'
+
+      - name: Setup Dependencies macOS
+        run: |
+          brew install node
+          nvm use node
+          npm install --global create-dmg
+
+      - name: Setup metadata
+        run: |
+          echo "GIT_SHORT_SHA=$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_ENV
+          echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
+          echo "VERSION=$(cat app/version.txt)" >> $GITHUB_ENV
+
+      - name: Build macOS
+        shell: bash
+        run: |
+          echo "${QT_ROOT_DIR}/bin" >> $GITHUB_PATH
+          scripts/generate-dmg.sh Release
+          mkdir artifacts
+          cp build/installer-Release/Moonlight-$VERSION.dmg artifacts/Moonlight-${VERSION}-${GIT_BRANCH}-${GIT_SHORT_SHA}.dmg
