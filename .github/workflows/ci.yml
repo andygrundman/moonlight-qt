@@ -51,13 +51,13 @@ jobs:
       - name: Build Windows x64
         shell: pwsh
         run: |
-          $env:PATH = "$($env:PATH);$($env:QT_ROOT_DIR)\msvc2022_64\bin"
+          $env:PATH = "$($env:PATH);$($env:QT_ROOT_DIR)\bin"
           echo "PATH=$($env:PATH)"
           scripts\build-arch.bat Release
           mkdir artifacts
-          Get-ChildItem -Path "build\" -Recurse
-          # echo ("Copy-Item -Path build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip -Destination artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip")
-          # Copy-Item -Path "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          Copy-Item "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          Copy-Item "build\symbols-x64-Release\MoonlightDebuggingSymbols-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          Get-ChildItem -Path "artifacts\" -Recurse
 
       - name: Install Qt arm64
         uses: jurplel/install-qt-action@v4
@@ -72,10 +72,10 @@ jobs:
       - name: Build Windows arm64
         shell: pwsh
         run: |
-          Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR)\msvc2022_arm64\bin\"
-          Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\msvc2022_arm64\bin\"
-          Copy-Item "scripts\appveyor\target_qt.conf -Destination "$($env:QT_ROOT_DIR)\msvc2022_arm64\bin\"
-          $env:PATH = "$($env:PATH);$($env:QT_ROOT_DIR)\msvc2022_arm64\bin"
+          Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR)\bin\"
+          Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\bin\"
+          Copy-Item "scripts\appveyor\target_qt.conf -Destination "$($env:QT_ROOT_DIR)\bin\"
+          $env:PATH = "$($env:PATH);$($env:QT_ROOT_DIR)\bin"
           echo "PATH=$($env:PATH)"
           scripts\build-arch.bat Release
           # mkdir artifacts
