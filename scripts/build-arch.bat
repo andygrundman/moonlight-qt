@@ -33,8 +33,6 @@ if /I "%BUILD_CONFIG%"=="debug" (
     )
 )
 
-echo Running with PATH=%PATH%
-
 rem Locate qmake and determine if we're using qmake.exe or qmake.bat
 rem qmake.bat is an ARM64 forwarder to the x64 version of qmake.exe
 where qmake.bat
