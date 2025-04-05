@@ -33,8 +33,6 @@ if /I "%BUILD_CONFIG%"=="debug" (
     )
 )
 
-echo HTAP is set to %HTAP%
-
 echo Running with PATH=%PATH%
 
 rem Locate qmake and determine if we're using qmake.exe or qmake.bat
