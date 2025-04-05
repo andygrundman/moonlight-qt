@@ -13,17 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  github_env:
-    name: GitHub Env Debug
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Dump GitHub context
-        run: echo "$GITHUB_CONTEXT"
-        shell: bash
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-
   build_win:
     name: Windows
     runs-on: windows-2022
@@ -42,12 +31,12 @@ jobs:
           target: desktop
           version: '6.8.*'
 
-      - name: Build metadata
+      - name: Setup metadata
         run: |
           echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
           echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
-          echo ("OLDPATH=$($env.PATH)) >> $env.GITHUB_ENV
+          echo ("OLDPATH=$($env.PATH)") >> $env.GITHUB_ENV
 
       - name: Build Windows x64
         shell: pwsh
