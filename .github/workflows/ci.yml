@@ -35,6 +35,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_arm64_cross_compiled
+          setup-python: false
 
       - uses: actions/checkout@v4
         with:
@@ -46,14 +47,27 @@ jobs:
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
           echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
 
-        # Copy-Item -Path "build-x64-release\app\release\Moonlight.exe -Destination" "artifacts\Moonlight-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).exe"
-      - name: Build Windows
+      - name: Build Windows x64/arm64
         shell: pwsh
         run: |
+          echo "PATH=$($env:PATH)"
           scripts\build-arch.bat Release
           mkdir artifacts
-          echo ("Copy-Item -Path build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip -Destination artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip")
-          Copy-Item -Path "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          Get-ChildItem -Path "build\" -Recurse
+          # echo ("Copy-Item -Path build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip -Destination artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip")
+          # Copy-Item -Path "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          # -- Build Windows arm64
+          Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR))\msvc2022_arm64\bin\"
+          Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR))\msvc2022_arm64\bin\"
+          Copy-Item "scripts\appveyor\target_qt.conf -Destination "$($env:QT_ROOT_DIR))\msvc2022_arm64\bin\"
+          $env:PATH = "$($env:QT_ROOT_DIR))\msvc2022_arm64\bin;$($env:PATH))"
+          scripts\build-arch.bat Release
+          mkdir artifacts
+          Get-ChildItem -Path "build\" -Recurse
+          # echo ("Copy-Item build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip -Destination artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip")
+          # Copy-Item "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          # -- Build universal binary bundle
+          scripts\generate-bundle.bat Release
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
