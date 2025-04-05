@@ -38,18 +38,19 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Capture metadata
+      - name: Build metadata
         run: |
           echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
-          echo ("VERSION=" + (echo app\version.txt)) >> $env:GITHUB_ENV
+          echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
 
       - name: Build Windows
         shell: pwsh
         run: |
           scripts\build-arch.bat Release
           mkdir artifacts
-          Copy-Item -Path "build/installer-x64-Release/MoonlightPortable-x64-${$env:VERSION}}.zip" -Destination "artifacts/MoonlightPortable-x64-${$env:VERSION}}-${$env:GIT_BRANCH}}-${$env:GIT_SHORT_SHA}}.zip"
+          Copy-Item -Path "build\installer-x64-release\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
+          Copy-Item -Path build-x64-release\app\release\Moonlight.exe -Destination "artifacts\Moonlight-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).exe"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
