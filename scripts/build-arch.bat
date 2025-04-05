@@ -1,4 +1,4 @@
-@echo on
+@echo off
 setlocal enableDelayedExpansion
 
 rem Run from Qt command prompt with working directory set to root of repo

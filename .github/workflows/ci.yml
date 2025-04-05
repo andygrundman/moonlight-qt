@@ -66,6 +66,7 @@ jobs:
           Copy-Item "scripts\appveyor\qmake.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\qtpaths.bat" -Destination "$($env:QT_ROOT_DIR)\bin"
           Copy-Item "scripts\appveyor\target_qt.conf" -Destination "$($env:QT_ROOT_DIR)\bin"
+          echo ("QTDIR=" + $env:QT_ROOT_DIR.replace('\msvc2022_arm64', '')) >> $env:GITHUB_ENV
           Add-Content $env:GITHUB_PATH "$($env:QT_ROOT_DIR)\bin"
           scripts\build-arch.bat Release arm64
           Copy-Item "build\installer-arm64-release\MoonlightPortable-arm64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-arm64-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).zip"
@@ -94,20 +95,20 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          arch: clang_64
-          host: mac
-          setup-python: false
-          target: desktop
-          version: '6.8.*'
+      # - name: Install Qt
+      #   uses: jurplel/install-qt-action@v4
+      #   with:
+      #     arch: clang_64
+      #     host: mac
+      #     target: desktop
+      #     version: '6.8.*'
 
       - name: Setup Dependencies macOS
         run: |
           brew install node
           nvm use node
           npm install --global create-dmg
+          brew install qt
 
       - name: Setup metadata
         run: |
