@@ -1,0 +1,58 @@
+---
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [andyg.github-actions-ci] # XXX
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  github_env:
+    name: GitHub Env Debug
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dump GitHub context
+        run: echo "$GITHUB_CONTEXT"
+        shell: bash
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+
+  build_win:
+    name: Windows
+    runs-on: windows-2022
+    steps:
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          setup-python: false
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Capture metadata
+        run: |
+          echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
+          echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
+
+      - name: Build Windows
+        shell: pwsh
+        run: |
+          set /p VERSION=<app\version.txt
+          scripts\build-arch.bat Release
+          mkdir artifacts
+          copy build\installer-x64-Release\MoonlightPortable-x64-%VERSION%.zip artifacts\MoonlightPortable-x64-%VERSION%-%GIT_BRANCH%-%GIT_SHORT_SHA%.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonlight-windows
+          path: artifacts/
