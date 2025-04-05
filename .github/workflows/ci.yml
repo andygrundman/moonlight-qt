@@ -36,7 +36,7 @@ jobs:
           echo ("GIT_SHORT_SHA=" + (git rev-parse --short $env:GITHUB_SHA)) >> $env:GITHUB_ENV
           echo ("GIT_BRANCH=" + $env:GITHUB_REF.replace('refs/heads/', '')) >> $env:GITHUB_ENV
           echo ("VERSION=" + (Get-Content app/version.txt)) >> $env:GITHUB_ENV
-          echo ("OLDPATH=$($env.PATH)") >> $env.GITHUB_ENV
+          echo ("OLDPATH=" + $env.PATH) >> $env.GITHUB_ENV
 
       - name: Build Windows x64
         shell: pwsh
