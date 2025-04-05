@@ -41,7 +41,6 @@ jobs:
       - name: Build Windows x64
         shell: pwsh
         run: |
-          echo (Get-Content $env.GITHUB_ENV)
           echo "$($env.OLDPATH)"
           $env:PATH = "$($env:QT_ROOT_DIR)\bin;$($env:OLDPATH)"
           scripts\build-arch.bat Release
