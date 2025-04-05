@@ -106,7 +106,6 @@ jobs:
       - name: Setup Dependencies macOS
         run: |
           brew install node
-          nvm use node
           npm install --global create-dmg
           brew install qt
 

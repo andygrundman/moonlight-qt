@@ -60,6 +60,7 @@ set QT_PATH=%QT_PATH:\qmake.cmd=%
 echo QT_PATH=%QT_PATH%
 if /I "%BUILD_ARCH%"=="arm64" (
     set ARCH=arm64
+    echo QTDIR=%QTDIR%
 
     rem Replace the _arm64 suffix with _64 to get the x64 bin path
     set HOSTBIN_PATH=%QT_PATH:_arm64=_64%
