@@ -1,4 +1,4 @@
-@echo off
+@echo on
 setlocal enableDelayedExpansion
 
 rem Run from Qt command prompt with working directory set to root of repo
@@ -117,7 +117,7 @@ rmdir /s /q %DEPLOY_FOLDER%
 rmdir /s /q %BUILD_FOLDER%
 rmdir /s /q %INSTALLER_FOLDER%
 rmdir /s /q %SYMBOLS_FOLDER%
-mkdir %BUILD_ROOT%
+if not exist %BUILD_ROOT% mkdir %BUILD_ROOT%
 mkdir %DEPLOY_FOLDER%
 mkdir %BUILD_FOLDER%
 mkdir %INSTALLER_FOLDER%
