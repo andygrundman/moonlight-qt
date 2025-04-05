@@ -73,7 +73,7 @@ jobs:
         shell: pwsh
         run: |
           scripts\generate-bundle.bat Release
-          Copy-Item "build\installer-release\MoonlightSetup-$($env.VERSION).exe" -Destination "artifacts\MoonlightSetup-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).exe"
+          Copy-Item "build\installer-release\MoonlightSetup-$($env:VERSION).exe" -Destination "artifacts\MoonlightSetup-$($env:VERSION)-$($env:GIT_BRANCH)-$($env:GIT_SHORT_SHA).exe"
           Get-ChildItem -Path "artifacts" -Recurse
 
       - name: Upload Artifacts
