@@ -54,8 +54,6 @@ pushd $BUILD_FOLDER
 make install || fail "Make install failed!"
 popd
 
-find $DEPLOY_FOLDER -*-*_Qt_* \( -name "moc_*" -or -name "*.o" -or -name "qrc_*" -or -name "Makefile*" -or -name "*.a" \) -exec rm {} \;
-
 echo Updating metadata
 perl -pi -e 's/__GITHUB_REF_NAME__/$ENV{GITHUB_REF_NAME}/' $DEPLOY_FOLDER/usr/share/metainfo/com.moonlight_stream.Moonlight.appdata.xml
 perl -pi -e 's/__GITHUB_SHA__/$ENV{GITHUB_SHA}/' $DEPLOY_FOLDER/usr/share/metainfo/com.moonlight_stream.Moonlight.appdata.xml
