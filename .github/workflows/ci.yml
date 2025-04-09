@@ -1,12 +1,12 @@
 ---
-name: CI
+name: Win/Mac/Linux builds
 
 on:
   pull_request:
     branches: [master]
     types: [opened, synchronize, reopened]
   push:
-    branches: [master, andyg.github-actions-ci-dev]
+    branches: [master]
   schedule:
     - cron: "45 23 * * 0" # weekly build of master (Sunday 11:45pm)
 

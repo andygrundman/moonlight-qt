@@ -1,0 +1,165 @@
+# These builds should run on systems as old as:
+# slackware 14.2, ubuntu 6.04, debian 9, opensuse 15.1
+#
+# We use manylinux, which is a Docker image from the Python community that is
+# based on an older version of CentOS that comes bundled with libraries that
+# are assumed to be present by default on almost all Linux systems. The build
+# tools and compiler attempt to be more modern.
+#
+# For a mapping of glibc version to Linux distro see
+# https://github.com/mayeut/pep600_compliance?tab=readme-ov-file#distro-compatibility
+#
+---
+name: glibc 2.28-compatible builds
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master, andyg.github-actions-ci-dev]
+  schedule:
+    - cron: "45 23 * * 0" # weekly build of master (Sunday 11:45pm)
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+
+  build_linux_glibc:
+    name: Linux x86_64 (glibc 2.28)
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+
+    steps:
+      - name: Gather metadata
+        run: |
+          echo "GLIBC_VERSION=$(ldd --version | perl -nle 'print "$1" if /(\d\.\d{2})/')" >> $GITHUB_ENV
+          echo "GIT_VERSION=$(git version | awk '{print $3}')" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+        # Missing: libx11-xcb-devel lib64vdpau-devel
+      - name: Install packaged deps
+        run: |
+          yum update
+          yum -y install \
+            wget nasm mesa-libgbm-devel libdrm-devel freetype-devel alsa-lib-devel \
+            dbus-devel mesa-libEGL-devel mesa-libGL-devel mesa-libGLES-devel mesa-libGLU-devel \
+            ibus-devel pulseaudio-libs-devel libudev-devel libX11-devel libXcursor-devel libXext-devel \
+            libXi-devel libXinerama-devel libxkbcommon-devel libXrandr-devel libXScrnSaver-devel libXt-devel \
+            libXv-devel libXxf86vm-devel libxcb-devel libX11-xcb wayland-devel wayland-protocols-devel \
+            opus-devel libvdpau-devel vulkan-loader-devel
+
+        # Try to load cached builds of custom built deps
+      - name: Check for cached dependencies
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          key: build_linux-glibc-deps-${{ matrix.qtversion }}-${{ hashFiles('.github/workflows/container-glibc.yml', 'app/deploy/linux/**') }}
+          path: "$HOME/local/**"
+
+      - name: Build SDL2
+        env:
+          SDL2_REV: 86fd4ed83cdcf71fef6a57766b126e88f923acd3
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          if [[ $GIT_VERSION == "2.49.0" ]]; then
+            git clone --revision $SDL2_REV --depth 1 https://github.com/libsdl-org/SDL.git SDL2
+            cd SDL2
+          else
+            git clone https://github.com/libsdl-org/SDL.git SDL2
+            cd SDL2
+            git checkout $SDL2_REV
+          fi
+          ./autogen.sh
+          ./configure --prefix=$HOME/local
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build SDL2_TTF
+        env:
+          SDL2_TTF_VER: 2.22.0
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          wget -q https://github.com/libsdl-org/SDL_ttf/releases/download/release-$SDL2_TTF_VER/SDL2_ttf-$SDL2_TTF_VER.tar.gz
+          tar -xf SDL2_ttf-$SDL2_TTF_VER.tar.gz
+          cd SDL2_ttf-$SDL2_TTF_VER
+          ./configure --prefix=$HOME/local
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build libva
+        env:
+          LIBVA_VER: 2.22.0
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          git clone --branch $LIBVA_VER --depth 1 https://github.com/intel/libva.git
+          cd libva
+          ./autogen.sh
+          ./configure --prefix=$HOME/local --enable-x11 --enable-wayland
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Build dav1d
+        env:
+          DAV1D_VER: 1.5.0
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          git clone --branch $DAV1D_VER --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d
+          meson setup build --prefix=$HOME/local -Ddefault_library=static -Dbuildtype=release -Denable_tools=false -Denable_tests=false
+          ninja -C build
+          ninja install -C build
+          cd ..
+
+      - name: Build libplacebo
+        env:
+          LIBPLACEBO_VER: v7.349.0
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          git clone --branch $LIBPLACEBO_VER --depth 1 https://code.videolan.org/videolan/libplacebo.git
+          cd libplacebo
+          git apply ../app/deploy/linux/appimage/*.patch
+          git submodule update --init --recursive
+          meson setup build --prefix=$HOME/local -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
+          ninja -C build
+          ninja install -C build
+          cd ..
+
+      - name: Build ffmpeg
+        env:
+          FFMPEG_REV: 87ccf995cb855f0baced9916928b7b48d8b6ed9d
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          if [[ $GIT_VERSION == "2.49.0" ]]; then
+            git clone --revision $FFMPEG_REV --depth 1 https://github.com/FFmpeg/FFmpeg.git FFmpeg
+            cd FFmpeg
+          else
+            git clone https://github.com/FFmpeg/FFmpeg.git FFmpeg
+            cd FFmpeg
+            git checkout $FFMPEG_REV
+          fi
+          ./configure --prefix=$HOME/local --enable-pic --disable-static --enable-shared --disable-all --enable-avcodec \
+            --enable-avformat --enable-swscale --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 \
+            --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi --enable-hwaccel=h264_vdpau \
+            --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau --enable-libdrm --enable-hwaccel=h264_vulkan \
+            --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan --enable-libdav1d --enable-decoder=libdav1d
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Save cached dependencies
+        uses: actions/cache/save@v4
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        with:
+          key: build_linux-glibc-deps-${{ matrix.qtversion }}-${{ hashFiles('.github/workflows/container-glibc.yml', 'app/deploy/linux/**') }}
+          path: "$HOME/local/**"
+
