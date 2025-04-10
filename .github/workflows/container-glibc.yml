@@ -1,8 +1,7 @@
-# These builds should run on systems as old as:
-# slackware 14.2, ubuntu 6.04, debian 9, opensuse 15.1
+# These builds should run on slightly older systems, ~ Ubuntu 18.04 era
 #
-# We use manylinux, which is a Docker image from the Python community that is
-# based on an older version of CentOS that comes bundled with libraries that
+# This uses manylinux, which is a Docker image from the Python community that is
+# based on an older version of CentOS and comes bundled with libraries that
 # are assumed to be present by default on almost all Linux systems. The build
 # tools and compiler attempt to be more modern.
 #
@@ -10,7 +9,7 @@
 # https://github.com/mayeut/pep600_compliance?tab=readme-ov-file#distro-compatibility
 #
 ---
-name: glibc 2.28-compatible builds
+name: Older Linux builds
 
 on:
   pull_request:
@@ -35,15 +34,15 @@ jobs:
     steps:
       - name: Gather metadata
         run: |
-          echo "GLIBC_VERSION=$(ldd --version | perl -nle 'print "$1" if /(\d\.\d{2})/')" >> $GITHUB_ENV
+          echo "GLIBC_VERSION=$(ldd --version | perl -nle 'print "$1" if /(\d\.\d\d?)/')" >> $GITHUB_ENV
           echo "GIT_VERSION=$(git version | awk '{print $3}')" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$HOME/local/lib/pkgconfig:$HOME/local/lib/x86_64-linux-gnu/pkgconfig" >> $GITHUB_ENV
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-        # Missing: libx11-xcb-devel lib64vdpau-devel
       - name: Install packaged deps
         run: |
           yum update
@@ -100,6 +99,11 @@ jobs:
           LIBVA_VER: 2.22.0
         if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         run: |
+          set +x
+          pkg-config --list-all
+          pkg-config --libs libsdl
+          pkg-config --print-variables libdrm
+          pkg-config --libs libdrm
           git clone --branch $LIBVA_VER --depth 1 https://github.com/intel/libva.git
           cd libva
           ./autogen.sh
@@ -125,10 +129,11 @@ jobs:
           LIBPLACEBO_VER: v7.349.0
         if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         run: |
-          git clone --branch $LIBPLACEBO_VER --depth 1 https://code.videolan.org/videolan/libplacebo.git
+          git clone --branch $LIBPLACEBO_VER --depth 1 \
+            --recurse-submodules --shallow-submodules \
+            https://code.videolan.org/videolan/libplacebo.git
           cd libplacebo
           git apply ../app/deploy/linux/appimage/*.patch
-          git submodule update --init --recursive
           meson setup build --prefix=$HOME/local -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
           ninja -C build
           ninja install -C build
@@ -163,3 +168,62 @@ jobs:
           key: build_linux-glibc-deps-${{ matrix.qtversion }}-${{ hashFiles('.github/workflows/container-glibc.yml', 'app/deploy/linux/**') }}
           path: "$HOME/local/**"
 
+###
+
+  build_steamlink:
+    name: Steam Link (32-bit armv7 glibc 2.19)
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux2014_x86_64
+
+    steps:
+      - name: Install packaged deps
+        run: |
+          yum update
+          yum search glibc-devel
+          yum search libstdc++
+
+      - name: Setup local env and metadata
+        run: |
+          echo "GLIBC_VERSION=$(ldd --version | perl -nle 'print "$1" if /(\d\.\d\d?)/')" >> $GITHUB_ENV
+          echo "GIT_VERSION=$(git version | awk '{print $3}')" >> $GITHUB_ENV
+          echo "STEAMLINK_SDK_PATH=$HOME/steamlink-sdk" >> $GITHUB_ENV
+
+        # The SDK includes most things we need, including Qt 5.14
+      - name: Checkout Steam Link SDK
+        run: |
+          git clone --depth=1 https://github.com/ValveSoftware/steamlink-sdk.git "$STEAMLINK_SDK_PATH"
+          if ! test -f "$STEAMLINK_SDK_PATH/setenv.sh"; then
+            echo "Failed to clone steamlink-sdk to $STEAMLINK_SDK_PATH"
+            exit 1
+          fi
+          echo "$STEAMLINK_SDK_PATH/bin" >> $GITHUB_PATH
+
+        # The checkout action needs node, which isn't available
+      - name: Checkout
+        run: |
+          git clone \
+            --branch "$GITHUB_REF_NAME" \
+            --depth 1 \
+            --recurse-submodules \
+            --shallow-submodules \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" $HOME/moonlight-qt
+          cd $HOME/moonlight-qt
+          echo "VERSION=$(cat app/version.txt)" >> $GITHUB_ENV
+
+      - name: Build Moonlight
+        run: |
+          cd $HOME/moonlight-qt
+          source $STEAMLINK_SDK_PATH/setenv.sh
+          #scripts/build-steamlink-app.sh
+          cd $STEAMLINK_SDK_PATH/examples/qt
+          ./build_steamlink.sh
+          ldd --verbose $(which qmake)
+          file example
+          #mv build/installer-release/Moonlight-SteamLink-$VERSION.zip artifacts/Moonlight-SteamLink.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight.dmg
+          path: artifacts/Moonlight-SteamLink.zip
+          compression-level: 0

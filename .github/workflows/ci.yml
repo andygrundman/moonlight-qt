@@ -269,10 +269,11 @@ jobs:
           LIBPLACEBO_VER: v7.349.0
         if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         run: |
-          git clone --branch $LIBPLACEBO_VER --depth 1 https://code.videolan.org/videolan/libplacebo.git
+          git clone --branch $LIBPLACEBO_VER --depth 1 \
+            --recurse-submodules --shallow-submodules \
+            https://code.videolan.org/videolan/libplacebo.git
           cd libplacebo
           git apply ../app/deploy/linux/appimage/*.patch
-          git submodule update --init --recursive
           meson setup build --prefix=$HOME/local -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
           ninja -C build
           ninja install -C build

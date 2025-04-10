@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 BUILD_CONFIG="release"
 QT_514_COMMIT="609d4aaccb503298e7fa9cef45e0ddc4c4afd63c"
 
@@ -29,6 +31,7 @@ mkdir $INSTALLER_FOLDER
 
 echo Initializing Steam Link SDK
 source $STEAMLINK_SDK_PATH/setenv.sh || fail "SL SDK initialization failed!"
+export
 
 echo Configuring the project
 pushd $BUILD_FOLDER
