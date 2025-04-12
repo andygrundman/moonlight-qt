@@ -6,7 +6,7 @@ on:
     branches: [master]
     types: [opened, synchronize, reopened]
   push:
-    branches: [master]
+    branches: [master, andyg.github-actions-ci-dev]
   schedule:
     - cron: "45 23 * * 0" # weekly build of master (Sunday 11:45pm)
 
@@ -120,6 +120,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Setup local env and metadata
+        run: |
+          mkdir -p $HOME/local/{bin,include,lib,Frameworks}
+          echo "$HOME/local/bin" >> $GITHUB_PATH
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOS_MIN=11.0" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$HOME/local/lib/pkgconfig:$HOME/local/lib/x86_64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "VERSION=$(cat app/version.txt)" >> $GITHUB_ENV
+          echo "GIT_VERSION=$(git version | awk '{print $3}')" >> $GITHUB_ENV
+
       - name: Install Qt
         uses: jdpurcell/install-qt-action@v5
         with:
@@ -128,14 +138,93 @@ jobs:
           target: desktop
           version: '6.8.3'
 
-      - name: Install Node
+      - name: Install build tools from brew
         run: |
-          brew install node
+          brew install nasm node meson
           npm install --global create-dmg
 
-      - name: Gather Metadata
+      # Try to load cached builds of custom built deps
+      - name: Check for cached dependencies
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          key: build_macos-deps-${{ hashFiles('.github/workflows/ci.yml') }}
+          path: '~/local/**'
+
+      - name: Build SDL2 & SDL2_ttf Frameworks
+        env:
+          SDL2_BRANCH: release-2.32.x
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
         run: |
-          echo "VERSION=$(cat app/version.txt)" >> $GITHUB_ENV
+          git clone --branch $SDL2_BRANCH --depth 1 https://github.com/libsdl-org/SDL.git SDL2
+          pushd SDL2/Xcode/SDL
+          xcodebuild -project SDL.xcodeproj -scheme Framework \
+            -configuration Release -sdk macosx \
+            CONFIGURATION_BUILD_DIR=$HOME/local/Frameworks \
+            OTHER_CFLAGS="-DSDL_MAC_NO_SANDBOX=1"
+          popd
+          file $HOME/local/Frameworks/SDL2.Framework/Versions/A/SDL2
+          file $HOME/local/Frameworks/SDL2_ttf.framework/Versions/A/SDL2_ttf
+
+      - name: Build OpenSSL
+        env:
+          OPENSSL_TAG: openssl-3.5.0
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        run: |
+          git clone --revision $OPENSSL_TAG --depth 1 https://github.com/openssl/openssl.git openssl
+          pushd openssl
+
+          # Build x64
+          ./Configure --prefix=$HOME/local --openssldir=$HOME/local darwin64-x86_64-cc \
+            -mmacosx-version-min=$MACOS_MIN no-tests no-engine no-apps no-legacy no-dso
+          make -j$(sysctl -n hw.logicalcpu_max)
+          make install_sw
+          # Patch the library paths
+          install_name_tool -id @loader_path/../Frameworks/libcrypto.3.dylib $HOME/local/lib/libcrypto.3.dylib
+          install_name_tool -id @loader_path/../Frameworks/libssl.3.dylib $HOME/local/lib/libssl.3.dylib
+          install_name_tool -change $HOME/local/lib/libcrypto.3.dylib @loader_path/../Frameworks/libcrypto.3.dylib $HOME/local/lib/libssl.3.dylib
+          # Move x64 aside
+          mv $HOME/local/lib/libcrypto.3.dylib $HOME/local/lib/libcrypto.3.dylib.x64
+          mv $HOME/local/lib/libssl.3.dylib $HOME/local/lib/libssl.3.dylib.x64
+          # Clean up in-tree build
+          git reset --hard
+          git clean -f -d -x
+
+          # Build arm64
+          ./Configure --prefix=$HOME/local --openssldir=$HOME/local darwin64-arm64-cc \
+            -mmacosx-version-min=$MACOS_MIN no-tests no-engine no-apps no-legacy no-dso
+          make -j$(sysctl -n hw.logicalcpu_max)
+          make install_sw
+          # Patch the library paths
+          install_name_tool -id @loader_path/../Frameworks/libcrypto.3.dylib $HOME/local/lib/libcrypto.3.dylib
+          install_name_tool -id @loader_path/../Frameworks/libssl.3.dylib $HOME/local/lib/libssl.3.dylib
+          install_name_tool -change $HOME/local/lib/libcrypto.3.dylib @loader_path/../Frameworks/libcrypto.3.dylib $HOME/local/lib/libssl.3.dylib
+          # Move arm64 aside
+          mv $HOME/local/lib/libcrypto.3.dylib $HOME/local/lib/libcrypto.3.dylib.arm64
+          mv $HOME/local/lib/libssl.3.dylib $HOME/local/lib/libssl.3.dylib.arm64
+          # Clean up in-tree build
+          git reset --hard
+          git clean -f -d -x
+
+          # lipo universal binary
+          lipo $HOME/local/lib/libcrypto.3.dylib.* -create -o $HOME/local/lib/libcrypto.3.dylib
+          lipo $HOME/local/lib/libssl.3.dylib.* -create -o $HOME/local/lib/libssl.3.dylib
+          popd
+
+      # - name: Build dav1d
+
+      # - name: Build FFmpeg
+
+      # - name: Build Opus
+
+      # - name: Build discord-rpc
+
+      - name: Save cached dependencies
+        uses: actions/cache/save@v4
+        if: ${{ steps.cache-deps.outputs.cache-hit != 'true' }}
+        with:
+          key: build_macos-deps-${{ hashFiles('.github/workflows/ci.yml') }}
+          path: '~/local/**'
 
       - name: Build macOS universal binary
         shell: bash
