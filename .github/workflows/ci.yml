@@ -50,6 +50,15 @@ jobs:
           Copy-Item "build\symbols-x64-Release\MoonlightDebuggingSymbols-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64.zip"
           Get-ChildItem -Path "artifacts" -Recurse
 
+      - name: Build Windows x64 debug
+        shell: pwsh
+        run: |
+          scripts\build-arch.bat Debug x64
+          mkdir artifacts
+          Copy-Item "build\installer-x64-debug\MoonlightPortable-x64-debug-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-debug.zip"
+          Copy-Item "build\symbols-x64-Debug\MoonlightDebuggingSymbols-x64-debug-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64-debug.zip"
+          Get-ChildItem -Path "artifacts" -Recurse
+
       - name: Install Qt arm64
         uses: jdpurcell/install-qt-action@v5
         with:
