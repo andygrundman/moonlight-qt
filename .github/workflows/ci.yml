@@ -6,7 +6,7 @@ on:
     branches: [master]
     types: [opened, synchronize, reopened]
   push:
-    branches: [master]
+    branches: [master, andyg.github-actions-ci-debug]
   schedule:
     - cron: "45 23 * * 0" # weekly build of master (Sunday 11:45pm)
 
@@ -54,9 +54,8 @@ jobs:
         shell: pwsh
         run: |
           scripts\build-arch.bat Debug x64
-          mkdir artifacts
-          Copy-Item "build\installer-x64-debug\MoonlightPortable-x64-debug-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-debug.zip"
-          Copy-Item "build\symbols-x64-Debug\MoonlightDebuggingSymbols-x64-debug-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64-debug.zip"
+          Copy-Item "build\installer-x64-debug\MoonlightPortable-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightPortable-x64-debug.zip"
+          Copy-Item "build\symbols-x64-debug\MoonlightDebuggingSymbols-x64-$($env:VERSION).zip" -Destination "artifacts\MoonlightDebuggingSymbols-x64-debug.zip"
           Get-ChildItem -Path "artifacts" -Recurse
 
       - name: Install Qt arm64
@@ -103,6 +102,13 @@ jobs:
           path: artifacts/MoonlightPortable-x64.zip
           compression-level: 0
 
+      - name: Upload Artifacts (Portable x64 debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonlightPortable-x64-debug.zip
+          path: artifacts/MoonlightPortable-x64-debug.zip
+          compression-level: 0
+
       - name: Upload Artifacts (Portable arm64)
         uses: actions/upload-artifact@v4
         with:
@@ -116,6 +122,7 @@ jobs:
           name: MoonlightDebuggingSymbols
           path: |
             artifacts/MoonlightDebuggingSymbols-x64.zip
+            artifacts/MoonlightDebuggingSymbols-x64-debug.zip
             artifacts/MoonlightPortable-arm64.zip
           compression-level: 0
 
@@ -155,11 +162,26 @@ jobs:
           mv build/installer-Release/Moonlight\ ${VERSION}.dmg artifacts/Moonlight.dmg
           ls -lR artifacts
 
+      - name: Build macOS universal binary debug
+        shell: bash
+        run: |
+          echo "${QT_ROOT_DIR}/bin" >> $GITHUB_PATH
+          scripts/generate-dmg.sh Debug
+          mv build/installer-Debug/Moonlight\ ${VERSION}.dmg artifacts/Moonlight-debug.dmg
+          ls -lR artifacts
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Moonlight.dmg
           path: artifacts/Moonlight.dmg
+          compression-level: 0
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-debug.dmg
+          path: artifacts/Moonlight-debug.dmg
           compression-level: 0
 
 ###
