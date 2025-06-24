@@ -468,6 +468,8 @@ bool DrmRenderer::initialize(PDECODER_PARAMETERS params)
             if (connector->connection == DRM_MODE_CONNECTED && connector->count_modes > 0) {
                 m_ConnectorId = resources->connectors[i];
                 m_EncoderId = connector->encoder_id;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Found connected display with ConnectorId=%d and EncoderId=%d", m_ConnectorId, m_EncoderId);
             }
 
             drmModeFreeConnector(connector);
@@ -488,6 +490,7 @@ bool DrmRenderer::initialize(PDECODER_PARAMETERS params)
         if (encoder != nullptr) {
             if (encoder->encoder_id == m_EncoderId) {
                 m_CrtcId = encoder->crtc_id;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Found CrtcId=%d", m_CrtcId);
             }
 
             drmModeFreeEncoder(encoder);
@@ -812,13 +815,13 @@ void DrmRenderer::setHdrMode(bool enabled)
                                            enabled ? DRM_MODE_COLORIMETRY_BT2020_RGB : DRM_MODE_COLORIMETRY_DEFAULT);
         if (err == 0) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Set HDMI Colorspace: %s",
+                        "ConnectorId %d Set HDMI Colorspace: %s", m_ConnectorId,
                         enabled ? "BT.2020 RGB" : "Default");
         }
         else {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "drmModeObjectSetProperty(%s) failed: %d",
-                         m_ColorspaceProp->name,
+                         "ConnectorId %d Set HDMI Colorspace(%s) failed: %d", m_ConnectorId,
+                         enabled ? "BT.2020 RGB" : "Default",
                          errno);
             // Non-fatal
         }
@@ -868,13 +871,13 @@ void DrmRenderer::setHdrMode(bool enabled)
                                            enabled ? m_HdrOutputMetadataBlobId : 0);
         if (err == 0) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Set display HDR mode: %s", enabled ? "enabled" : "disabled");
+                        "ConnectorId %d Set display HDR mode: %s",
+                        m_ConnectorId, enabled ? "enabled" : "disabled");
         }
         else {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "drmModeObjectSetProperty(%s) failed: %d",
-                         m_HdrOutputMetadataProp->name,
-                         errno);
+                         "ConnectorId %d Set display HDR mode: %s failed: %d",
+                         m_ConnectorId, enabled ? "enabled" : "disabled", errno);
             // Non-fatal
         }
     }
