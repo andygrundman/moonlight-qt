@@ -94,7 +94,7 @@ static const CscParams k_CscParams_Bt2020Lim = {
     },
 
     // Offsets
-    { 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f },
+    { 64.0f / 1023.0f, 512.0f / 1023.0f, 512.0f / 1023.0f },
 };
 static const CscParams k_CscParams_Bt2020Full = {
     // CSC Matrix
@@ -105,7 +105,7 @@ static const CscParams k_CscParams_Bt2020Full = {
     },
 
     // Offsets
-    { 0.0f, 128.0f / 255.0f, 128.0f / 255.0f },
+    { 0.0f, 512.0f / 1023.0f, 512.0f / 1023.0f },
 };
 
 struct Vertex
