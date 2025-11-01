@@ -170,5 +170,10 @@ void VTBaseRenderer::setHdrMode(bool enabled) {
         }
     }
 
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "HDR metadata: MasteringDisplayColorVolume min/max luminance: %hu/%hu, maxCLL/maxFALL: %hu/%hu",
+                hdrMetadata.minDisplayLuminance, hdrMetadata.maxDisplayLuminance,
+                hdrMetadata.maxContentLightLevel, hdrMetadata.maxFrameAverageLightLevel);
+
     m_HdrMetadataChanged = true;
 }

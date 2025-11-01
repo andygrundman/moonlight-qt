@@ -22,6 +22,11 @@ extern "C" {
     #include <libavutil/pixdesc.h>
 }
 
+typedef enum TransferFunction {
+    TF_NonLinear = 0, // PQ passthrough
+    TF_Linear  = 1,   // PQ -> EDR linear
+} TransferFunction;
+
 struct CscParams
 {
     vector_float3 matrix[3];
@@ -32,6 +37,8 @@ struct ParamBuffer
 {
     CscParams cscParams;
     float bitnessScaleFactor;
+    uint transferFunction;
+    float opticalOutputScale;
 };
 
 static const CscParams k_CscParams_Bt601Lim = {
@@ -325,13 +332,19 @@ public:
                 break;
             }
 
-            // Set the EDR metadata for HDR10 to enable OS tonemapping
+            // Set the EDR metadata for HDR10 to enable OS tonemapping. This involves converting to a linear colorspace.
             if (frame->color_trc == AVCOL_TRC_SMPTE2084 && m_MasteringDisplayColorVolume != nullptr) {
+                float opticalOutputScale = 203.0;
+                m_MetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+                m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearITUR_2020);
+                paramBuffer.transferFunction = TF_Linear;
+                paramBuffer.opticalOutputScale = opticalOutputScale;
                 m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
                                                                            contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
-                                                                    opticalOutputScale:203.0];
+                                                                    opticalOutputScale:opticalOutputScale];
             }
             else {
+                paramBuffer.transferFunction = TF_NonLinear;
                 m_MetalLayer.EDRMetadata = nullptr;
             }
 
