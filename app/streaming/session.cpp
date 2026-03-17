@@ -5,6 +5,7 @@
 
 #include <Limelight.h>
 #include "SDL_compat.h"
+#include "path.h"
 #include "utils.h"
 
 #ifdef HAVE_FFMPEG
@@ -665,6 +666,29 @@ bool Session::initialize(QQuickWindow* qtWindow)
 
     m_StreamConfig.fps = m_Preferences->fps;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
+
+    // get the precise refresh rate
+    m_StreamConfig.clientRefreshRateX100 = 0;
+    RefreshRateRational refreshRate = StreamUtils::getDisplayRefreshRateRational(testWindow);
+    if (refreshRate.valid) {
+        // choosing the lesser value should cover both common use cases: 60fps on 120hz, and 60fps on 59.94hz
+        int x100 = lround(refreshRate.hz * 100);
+        m_StreamConfig.clientRefreshRateX100 = SDL_min(m_StreamConfig.fps * 100, x100);
+        if (x100 % 2997 == 0) {
+            // Handle multiples of NTSC 29.97 e.g. 59.94, 119.88 paired with multiples of 30fps
+            if (m_StreamConfig.fps % 30 == 0) {
+                m_StreamConfig.clientRefreshRateX100 = 2997 * (m_StreamConfig.fps / 30);
+            }
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Set clientRefreshRateX100=%d for precise refresh rate %.2fHz (%d/%d)",
+                    m_StreamConfig.clientRefreshRateX100, refreshRate.hz,
+                    refreshRate.numerator, refreshRate.denominator);
+    }
+    else {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Failed to set clientRefreshRateX100, could not determine precise refresh rate");
+    }
 
 #ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform

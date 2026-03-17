@@ -51,6 +51,9 @@
 #define SER_CAPTURESYSKEYS "capturesyskeys"
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
+#define SER_RENDERER "renderer"
+#define SER_VTMETALFRAMESINFLIGHT "vtMetalFramesInFlight"
+#define SER_SHOWMETALPERFORMANCEHUD "showMetalPerformanceHud"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -168,6 +171,10 @@ void StreamingPreferences::reload()
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
+    renderer = static_cast<Renderer>(settings.value(SER_RENDERER,
+                                                    static_cast<int>(Renderer::RENDERER_VT_METAL)).toInt());
+    vtMetalFramesInFlight = settings.value(SER_VTMETALFRAMESINFLIGHT, 3).toInt();
+    showMetalPerformanceHud = settings.value(SER_SHOWMETALPERFORMANCEHUD, false).toBool();
 
 
     // Perform default settings updates as required based on last default version
@@ -358,6 +365,9 @@ void StreamingPreferences::save()
     settings.setValue(SER_SWAPFACEBUTTONS, swapFaceButtons);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
+    settings.setValue(SER_RENDERER, static_cast<int>(renderer));
+    settings.setValue(SER_VTMETALFRAMESINFLIGHT, vtMetalFramesInFlight);
+    settings.setValue(SER_SHOWMETALPERFORMANCEHUD, showMetalPerformanceHud);
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)
