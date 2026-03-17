@@ -11,6 +11,10 @@
 #include "waylandvsyncsource.h"
 #endif
 
+#ifdef Q_OS_DARWIN
+#include "displaylink_source.h"
+#endif
+
 #include <SDL_syswm.h>
 
 // Limit the number of queued frames to prevent excessive memory consumption
@@ -55,8 +59,10 @@ Pacer::~Pacer()
     }
 
     // Stop V-sync callbacks
-    delete m_VsyncSource;
-    m_VsyncSource = nullptr;
+    if (m_VsyncSource) {
+        delete m_VsyncSource;
+        m_VsyncSource = nullptr;
+    }
 
     // Stop the render thread
     if (m_RenderThread != nullptr) {
@@ -113,22 +119,27 @@ int Pacer::vsyncThread(void *context)
 
     bool async = me->m_VsyncSource->isAsync();
     while (!me->m_Stopping) {
+        double remainingMilliseconds = -1.0;
+
         if (async) {
             // Wait for the VSync source to invoke signalVsync() or 100ms to elapse
             me->m_FrameQueueLock.lock();
             me->m_VsyncSignalled.wait(&me->m_FrameQueueLock, 100);
             me->m_FrameQueueLock.unlock();
+
+            remainingMilliseconds = me->m_VsyncSource->remainingMilliseconds();
         }
         else {
             // Let the VSync source wait in the context of our thread
             me->m_VsyncSource->waitForVsync();
+            remainingMilliseconds = me->m_VsyncSource->remainingMilliseconds();
         }
 
         if (me->m_Stopping) {
             break;
         }
 
-        me->handleVsync(1000 / me->m_DisplayFps);
+        me->handleVsync(SDL_max(0.0, remainingMilliseconds));
     }
 
     return 0;
@@ -198,7 +209,7 @@ void Pacer::enqueueFrameForRenderingAndUnlock(AVFrame *frame)
 
 // Called in an arbitrary thread by the IVsyncSource on V-sync
 // or an event synchronized with V-sync
-void Pacer::handleVsync(int timeUntilNextVsyncMillis)
+void Pacer::handleVsync(double timeUntilNextVsyncMillis)
 {
     // Make sure initialize() has been called
     SDL_assert(m_MaxVideoFps != 0);
@@ -259,11 +270,14 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
     enqueueFrameForRenderingAndUnlock(m_PacingQueue.dequeue());
 }
 
-bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
+bool Pacer::initialize(PDECODER_PARAMETERS params)
 {
-    m_MaxVideoFps = maxVideoFps;
+    SDL_Window* window = params->window;
+    m_MaxVideoFps = params->frameRate;
     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
+    bool enablePacing = params->enableFramePacing
+                     || (params->enableVsync && (m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING));
 
     if (enablePacing) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -282,19 +296,33 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
         switch (info.subsystem) {
     #ifdef Q_OS_WIN32
         case SDL_SYSWM_WINDOWS:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Frame pacing: using D3D WaitForVerticalBlankEvent");
             m_VsyncSource = new DxVsyncSource(this);
             break;
     #endif
 
     #if defined(SDL_VIDEO_DRIVER_WAYLAND) && defined(HAS_WAYLAND)
         case SDL_SYSWM_WAYLAND:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Frame pacing: using Wayland frame callbacks");
             m_VsyncSource = new WaylandVsyncSource(this);
+            break;
+    #endif
+
+    #ifdef Q_OS_DARWIN
+        case SDL_SYSWM_COCOA:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Frame pacing: using macOS DisplayLink");
+            m_VsyncSource = new DisplayLinkSource(this);
             break;
     #endif
 
         default:
             // Platforms without a VsyncSource will just render frames
             // immediately like they used to.
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Frame pacing: no vsync source on this platform, pacing will be less effective.");
             break;
         }
 
@@ -396,6 +424,7 @@ void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
     SDL_assert(queue.size() <= MAX_QUEUED_FRAMES);
     if (queue.size() == MAX_QUEUED_FRAMES) {
         AVFrame* frame = queue.dequeue();
+        m_VideoStats->pacerDroppedFrames++;
         av_frame_free(&frame);
     }
 }
