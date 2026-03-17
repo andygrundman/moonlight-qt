@@ -450,6 +450,14 @@ int main(int argc, char *argv[])
         qputenv("QML_DISK_CACHE_PATH", Path::getQmlCacheDir().toUtf8());
     }
 
+#ifdef Q_OS_DARWIN
+    // The HUD only responds to this env var and it must be defined prior to using Metal
+    // I can't find a way to enable it only for SDL, but a hacky workaround is to set opacity to 0%.
+    qputenv("MTL_HUD_ENABLED", "1");
+    qputenv("MTL_HUD_DISABLE_MENU_BAR", "1");
+    qputenv("MTL_HUD_OPACITY", "0.0");
+#endif
+
 #ifdef Q_OS_WIN32
     // Grab the original std handles before we potentially redirect them later
     HANDLE oldConOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -608,7 +616,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-#ifdef Q_OS_MACOS
+#ifdef Q_OS_DARWIN
     // This avoids using the default keychain for SSL, which may cause
     // password prompts on macOS.
     qputenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1");

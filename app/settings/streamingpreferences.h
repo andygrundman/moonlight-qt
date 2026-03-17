@@ -156,7 +156,10 @@ public:
     Q_PROPERTY(bool swapFaceButtons MEMBER swapFaceButtons NOTIFY swapFaceButtonsChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
-    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
+    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged)
+    Q_PROPERTY(Renderer renderer MEMBER renderer NOTIFY rendererChanged)
+    Q_PROPERTY(int vtMetalFramesInFlight MEMBER vtMetalFramesInFlight NOTIFY vtMetalFramesInFlightChanged)
+    Q_PROPERTY(bool showMetalPerformanceHud MEMBER showMetalPerformanceHud NOTIFY showMetalPerformanceHudChanged);
 
     Q_INVOKABLE bool retranslate();
 
@@ -200,6 +203,8 @@ public:
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
+    int vtMetalFramesInFlight;
+    bool showMetalPerformanceHud;
 
 signals:
     void displayModeChanged();
@@ -238,6 +243,8 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void vtMetalFramesInFlightChanged();
+    void showMetalPerformanceHudChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

@@ -726,151 +726,11 @@ Flickable {
                     }
                 }
 
-                Label {
+                RendererDisplayModeSection {
                     width: parent.width
-                    id: windowModeTitle
-                    text: qsTr("Display mode")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                    visible: SystemProperties.hasDesktopEnvironment
+                    languageChangedSignal: settingsPage.languageChanged
                 }
 
-                AutoResizingComboBox {
-                    function createModel() {
-                        var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', parent, '')
-
-                        model.append({
-                                         text: qsTr("Fullscreen"),
-                                         val: StreamingPreferences.WM_FULLSCREEN
-                                     })
-
-                        model.append({
-                                         text: qsTr("Borderless windowed"),
-                                         val: StreamingPreferences.WM_FULLSCREEN_DESKTOP
-                                     })
-
-                        model.append({
-                                         text: qsTr("Windowed"),
-                                         val: StreamingPreferences.WM_WINDOWED
-                                     })
-
-
-                        // Set the recommended option based on the OS
-                        for (var i = 0; i < model.count; i++) {
-                            var thisWm = model.get(i).val;
-                            if (thisWm === StreamingPreferences.recommendedFullScreenMode) {
-                                model.get(i).text += " " + qsTr("(Recommended)")
-                                model.move(i, 0, 1)
-                                break
-                            }
-                        }
-
-                        return model
-                    }
-
-
-                    // This is used on initialization and upon retranslation
-                    function reinitialize() {
-                        if (!visible) {
-                            // Do nothing if the control won't even be visible
-                            return
-                        }
-
-                        model = createModel()
-                        currentIndex = 0
-
-                        // Set the current value based on the saved preferences
-                        var savedWm = StreamingPreferences.windowMode
-                        for (var i = 0; i < model.count; i++) {
-                             var thisWm = model.get(i).val;
-                             if (savedWm === thisWm) {
-                                 currentIndex = i
-                                 break
-                             }
-                        }
-
-                        activated(currentIndex)
-                    }
-
-                    Component.onCompleted: {
-                        reinitialize()
-                        languageChanged.connect(reinitialize)
-                    }
-
-                    id: windowModeComboBox
-                    visible: SystemProperties.hasDesktopEnvironment
-                    enabled: !SystemProperties.rendererAlwaysFullScreen
-                    hoverEnabled: true
-                    textRole: "text"
-                    onActivated: {
-                        StreamingPreferences.windowMode = model.get(currentIndex).val
-                    }
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like macOS Spaces, Alt+Tab, screenshot tools, on-screen overlays, etc.")
-                }
-
-                Row {
-                    spacing: 5
-                    width: parent.width
-
-                    CheckBox {
-                        id: vsyncCheck
-                        hoverEnabled: true
-                        text: qsTr("V-Sync")
-                        font.pointSize:  12
-                        checked: StreamingPreferences.enableVsync
-                        onCheckedChanged: {
-                            StreamingPreferences.enableVsync = checked
-                        }
-
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
-                    }
-
-                    CheckBox {
-                        id: framePacingCheck
-                        hoverEnabled: true
-                        text: qsTr("Frame pacing")
-                        font.pointSize:  12
-                        enabled: StreamingPreferences.enableVsync
-                        checked: StreamingPreferences.enableVsync && StreamingPreferences.framePacing
-                        onCheckedChanged: {
-                            StreamingPreferences.framePacing = checked
-                        }
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
-                    }
-                }
-
-                CheckBox {
-                    id: enableHdr
-                    width: parent.width
-                    text: qsTr("Enable HDR")
-                    font.pointSize: 12
-
-                    enabled: SystemProperties.supportsHdr
-                    checked: enabled && StreamingPreferences.enableHdr
-                    onCheckedChanged: {
-                        StreamingPreferences.enableHdr = checked
-                    }
-
-                    // Updating StreamingPreferences.videoCodecConfig is handled above
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: enabled ?
-                                      qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
-                                    :
-                                      qsTr("HDR streaming is not supported on this PC.")
-                }
             }
         }
 
@@ -1239,7 +1099,7 @@ Flickable {
                         ListElement {
                             text: qsTr("Maximized")
                             val: StreamingPreferences.UI_MAXIMIZED
-                        }   
+                        }
                         ListElement {
                             text: qsTr("Fullscreen")
                             val: StreamingPreferences.UI_FULLSCREEN

@@ -13,14 +13,35 @@
 // - 1 frame for deferred free
 #define PACER_MAX_OUTSTANDING_FRAMES (3 + 1 + 1)
 
+class Pacer;
+typedef void (*VsyncCallback)(double vsyncTimestamp, double targetTimestamp, void* ctx);
+struct VsyncCallbackData {
+    VsyncCallback callback;
+    void* ctx;
+};
+
 class IVsyncSource {
 public:
     virtual ~IVsyncSource() {}
     virtual bool initialize(SDL_Window* window, int displayFps) = 0;
+    virtual void setPacer(Pacer* pacer) = 0;
 
     // Asynchronous sources produce callbacks on their own, while synchronous
     // sources require calls to waitForVsync().
     virtual bool isAsync() = 0;
+
+    // Optional method called before destruction
+    virtual void stop() = 0;
+
+    // Register a callback to receive for every vsync. Receives 2 doubles,
+    // the timestamp of the current vsync interval, and the timestamp of the
+    // next interval. The next frame must be presented before the second timestamp.
+    virtual void setExtraCallback(VsyncCallback cb, void *ctx) = 0;
+
+    // Call this method after receiving m_VsyncSignalled or after
+    // waitForVsync() returns to obtain the remaining time in the current
+    // vblank interval. A negative value means the interval was missed.
+    virtual double remainingMilliseconds() = 0;
 
     virtual void waitForVsync() {
         // Synchronous sources must implement waitForVsync()!
@@ -37,7 +58,7 @@ public:
 
     void submitFrame(AVFrame* frame);
 
-    bool initialize(SDL_Window* window, int maxVideoFps, bool enablePacing);
+    bool initialize(PDECODER_PARAMETERS params);
 
     void signalVsync();
 
@@ -48,7 +69,7 @@ private:
 
     static int renderThread(void* context);
 
-    void handleVsync(int timeUntilNextVsyncMillis);
+    void handleVsync(double timeUntilNextVsyncMillis);
 
     void enqueueFrameForRenderingAndUnlock(AVFrame* frame);
 
