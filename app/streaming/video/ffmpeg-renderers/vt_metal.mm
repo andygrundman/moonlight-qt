@@ -1,10 +1,12 @@
-// Nasty hack to avoid conflict between AVFoundation and
+// Avoid conflict between AVFoundation and
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
+#include "pacer/displaylink_source.h"
 #include "pacer/pacer.h"
 #undef AVMediaType
 
+#include <algorithm>
 #include <SDL_syswm.h>
 #include <Limelight.h>
 #include "streaming/session.h"
@@ -41,13 +43,17 @@ struct Vertex
     simd_float2 texCoord;
 };
 
+// https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/TripleBuffering.html
+// https://developer.apple.com/documentation/metal/synchronizing-cpu-and-gpu-work?language=objc
+#define MAX_FRAMES_IN_FLIGHT 3
+
 #define MAX_VIDEO_PLANES 3
 
 class VTMetalRenderer;
-
-@interface DisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
+@interface VTMetalObserver : NSObject
 
 - (id)initWithRenderer:(VTMetalRenderer *)renderer;
+- (void)stop;
 
 @end
 
@@ -60,38 +66,53 @@ public:
           m_Window(nullptr),
           m_HwContext(nullptr),
           m_MetalLayer(nullptr),
-          m_MetalDisplayLink(nullptr),
-          m_LatestUnrenderedFrame(nullptr),
-          m_FrameLock(SDL_CreateMutex()),
-          m_FrameReady(SDL_CreateCond()),
+          m_VsyncReady(dispatch_semaphore_create(0)),
           m_TextureCache(nullptr),
           m_CscParamsBuffer(nullptr),
           m_VideoVertexBuffer(nullptr),
           m_OverlayTextures{},
           m_OverlayLock(0),
+          m_RenderPassDescriptor(nullptr),
           m_VideoPipelineState(nullptr),
           m_OverlayPipelineState(nullptr),
           m_ShaderLibrary(nullptr),
           m_CommandQueue(nullptr),
+          m_CurrentBuffer(0),
           m_SwMappingTextures{},
           m_MetalView(nullptr),
           m_LastFrameWidth(-1),
           m_LastFrameHeight(-1),
           m_LastDrawableWidth(-1),
-          m_LastDrawableHeight(-1)
+          m_LastDrawableHeight(-1),
+          m_lastPts(0),
+          m_IsFullScreen(false),
+          m_MinRefreshInterval(1.0f / 60),
+          m_MaxRefreshInterval(1.0f / 60),
+          m_LastPresented{0.0},
+          m_LastGPUStartTime{0.0},
+          m_UsingVRR{false},
+          m_IsPaused{false},
+          m_Observer(nil)
     {
-    }
+        StreamingPreferences *prefs = StreamingPreferences::get();
+        m_MaxFramesInFlight = SDL_min(prefs->vtMetalFramesInFlight, MAX_FRAMES_IN_FLIGHT);
+        m_FrameReady = dispatch_semaphore_create(m_MaxFramesInFlight);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Metal renderer using MaxFramesInFlight=%d", m_MaxFramesInFlight);
+   }
 
     virtual ~VTMetalRenderer() override
     { @autoreleasepool {
-        // Stop the display link and free associated state
-        stopDisplayLink();
-        av_frame_free(&m_LatestUnrenderedFrame);
-        SDL_DestroyCond(m_FrameReady);
-        SDL_DestroyMutex(m_FrameLock);
+        // hide Metal HUD so it doesn't appear over the Qt UI
+        showMetalHud(false);
 
         if (m_HwContext != nullptr) {
             av_buffer_unref(&m_HwContext);
+        }
+
+        if (m_Observer != nil) {
+            [m_Observer stop];
+            m_Observer = nil;
         }
 
         if (m_CscParamsBuffer != nullptr) {
@@ -100,6 +121,10 @@ public:
 
         if (m_VideoVertexBuffer != nullptr) {
             [m_VideoVertexBuffer release];
+        }
+
+        if (m_RenderPassDescriptor != nullptr) {
+            [m_RenderPassDescriptor release];
         }
 
         if (m_VideoPipelineState != nullptr) {
@@ -112,9 +137,11 @@ public:
             }
         }
 
-        for (int i = 0; i < MAX_VIDEO_PLANES; i++) {
-            if (m_SwMappingTextures[i] != nullptr) {
-                [m_SwMappingTextures[i] release];
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            for (int j = 0; j < MAX_VIDEO_PLANES; j++) {
+                if (m_SwMappingTextures[i][j] != nullptr) {
+                    [m_SwMappingTextures[i][j] release];
+                }
             }
         }
 
@@ -138,6 +165,27 @@ public:
             SDL_Metal_DestroyView(m_MetalView);
         }
     }}
+
+    void showMetalHud(bool visible)
+    {
+        if (@available(macOS 13.0, *)) {
+            if (visible) {
+                m_MetalLayer.developerHUDProperties = @{
+                    @"MTL_HUD_OPACITY": @0.8,
+                    @"MTL_HUD_DISABLE_MENU_BAR": @0,
+                    @"MTL_HUD_ALIGNMENT": @"topright",
+                    @"MTL_HUD_ELEMENTS": @"device,rosetta,layersize,layerscale,memory,fps,frameinterval,frameintervalgraph,presentdelay,gputime,thermal,refreshrate,gamemode,client",
+                    @"MTL_HUD_SHOW_METRICS_RANGE": @1,
+                };
+            }
+            else {
+                m_MetalLayer.developerHUDProperties = @{
+                    @"MTL_HUD_OPACITY": @0.0,
+                    @"MTL_HUD_DISABLE_MENU_BAR": @1,
+                };
+            }
+        }
+    }
 
     bool updateVideoRegionSizeForFrame(AVFrame* frame)
     {
@@ -175,7 +223,7 @@ public:
         };
 
         [m_VideoVertexBuffer release];
-        auto bufferOptions = MTLCPUCacheModeWriteCombined | MTLResourceStorageModeManaged;
+        auto bufferOptions = MTLCPUCacheModeWriteCombined | (m_MetalLayer.device.hasUnifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged);
         m_VideoVertexBuffer = [m_MetalLayer.device newBufferWithBytes:verts length:sizeof(verts) options:bufferOptions];
         if (!m_VideoVertexBuffer) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -231,9 +279,6 @@ public:
         CGColorSpaceRef newColorSpace;
         ParamBuffer paramBuffer;
 
-        // Stop the display link before changing the Metal layer
-        stopDisplayLink();
-
         switch (colorspace) {
         case COLORSPACE_REC_709:
             m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
@@ -288,7 +333,7 @@ public:
 
         // Create the new colorspace parameter buffer for our fragment shader
         [m_CscParamsBuffer release];
-        auto bufferOptions = MTLCPUCacheModeWriteCombined | MTLResourceStorageModeManaged;
+        auto bufferOptions = MTLCPUCacheModeWriteCombined | (m_MetalLayer.device.hasUnifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged);
         m_CscParamsBuffer = [m_MetalLayer.device newBufferWithBytes:(void*)&paramBuffer length:sizeof(paramBuffer) options:bufferOptions];
         if (!m_CscParamsBuffer) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -324,7 +369,7 @@ public:
         pipelineDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
         [m_OverlayPipelineState release];
         m_OverlayPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:nullptr];
-        if (!m_VideoPipelineState) {
+        if (!m_OverlayPipelineState) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "Failed to create overlay pipeline state");
             return false;
@@ -348,14 +393,15 @@ public:
         NSUInteger planeWidth = planeIndex ? AV_CEIL_RSHIFT(frame->width, formatDesc->log2_chroma_w) : frame->width;
         NSUInteger planeHeight = planeIndex ? AV_CEIL_RSHIFT(frame->height, formatDesc->log2_chroma_h) : frame->height;
 
+        auto texture = m_SwMappingTextures[m_CurrentBuffer][planeIndex];
+
         // Recreate the texture if the plane size changes
-        if (m_SwMappingTextures[planeIndex] && (m_SwMappingTextures[planeIndex].width != planeWidth ||
-                                                m_SwMappingTextures[planeIndex].height != planeHeight)) {
-            [m_SwMappingTextures[planeIndex] release];
-            m_SwMappingTextures[planeIndex] = nil;
+        if (texture && (texture.width != planeWidth || texture.height != planeHeight)) {
+            [texture release];
+            texture = nil;
         }
 
-        if (!m_SwMappingTextures[planeIndex]) {
+        if (!texture) {
             MTLPixelFormat metalFormat;
 
             switch (formatDesc->comp[planeIndex].step) {
@@ -382,20 +428,21 @@ public:
             texDesc.storageMode = MTLStorageModeManaged;
             texDesc.usage = MTLTextureUsageShaderRead;
 
-            m_SwMappingTextures[planeIndex] = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
-            if (!m_SwMappingTextures[planeIndex]) {
+            texture = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
+            if (!texture) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to allocate software frame texture");
                 return nil;
             }
+            m_SwMappingTextures[m_CurrentBuffer][planeIndex] = texture;
         }
 
-        [m_SwMappingTextures[planeIndex] replaceRegion:MTLRegionMake2D(0, 0, planeWidth, planeHeight)
-                                           mipmapLevel:0
-                                             withBytes:frame->data[planeIndex]
-                                           bytesPerRow:frame->linesize[planeIndex]];
+        [texture replaceRegion:MTLRegionMake2D(0, 0, planeWidth, planeHeight)
+                   mipmapLevel:0
+                     withBytes:frame->data[planeIndex]
+                   bytesPerRow:frame->linesize[planeIndex]];
 
-        return m_SwMappingTextures[planeIndex];
+        return texture;
     }
 
     // Caller frees frame after we return
@@ -448,14 +495,9 @@ public:
             }
         }
 
-        // Prepare a render pass to render into the next drawable
-        auto renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-        renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
-        renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
-        renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        m_RenderPassDescriptor.colorAttachments[0].texture = drawable.texture;
         auto commandBuffer = [m_CommandQueue commandBuffer];
-        auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
+        auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:m_RenderPassDescriptor];
 
         // Bind textures and buffers then draw the video region
         [renderEncoder setRenderPipelineState:m_VideoPipelineState];
@@ -463,12 +505,6 @@ public:
             for (size_t i = 0; i < planes; i++) {
                 [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(cvMetalTextures[i]) atIndex:i];
             }
-            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
-                // Free textures after completion of rendering per CVMetalTextureCache requirements
-                for (size_t i = 0; i < planes; i++) {
-                    CFRelease(cvMetalTextures[i]);
-                }
-            }];
         }
         else {
             for (size_t i = 0; i < planes; i++) {
@@ -518,25 +554,136 @@ public:
                 [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
                 [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
                 [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
-                [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
+                [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
                 [overlayTexture release];
             }
         }
 
         [renderEncoder endEncoding];
+        m_RenderPassDescriptor.colorAttachments[0].texture = nil;
 
-        // Flip to the newly rendered buffer
-        [commandBuffer presentDrawable:drawable];
+        [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+            // The obvious way of measuring frametime, but see below. Note that presentedTime can be 0.0
+            // if the frame was missed for some reason.
+            CFTimeInterval lastPresented = (CFTimeInterval)m_LastPresented.load();
+            FQLog(@"[%f] dID %lu d.presentedTime %f, lastPresented %f, frametime %.3fms",
+                CACurrentMediaTime(), (unsigned long)d.drawableID, d.presentedTime, lastPresented, (d.presentedTime - lastPresented) * 1000.0);
+            if (lastPresented > 0.0 && d.presentedTime > 0.0) {
+                //CFTimeInterval frametime = d.presentedTime - lastPresented;
+            }
+            if (d.presentedTime > 0.0) {
+                m_LastPresented.store((double)d.presentedTime);
+            }
+        }];
+
+        __block dispatch_semaphore_t block_semaphore = m_FrameReady;
+        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            // this error indicates we've been moved to the background and should stop Metal activity
+            if (cb.status == MTLCommandBufferStatusError) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Metal command buffer error: %lu",
+                            (unsigned long)cb.error);
+            }
+
+            // signal that the next frame can begin processing
+            dispatch_semaphore_signal(block_semaphore);
+
+            // Found this in a comment in MTLDrawable.h:
+            // "Be careful when you use delta between this presentedTime and previous frame's presentedTime
+            // to animate next frame. If the frame was presented using presentAfterMinimumDuration or presentAtTime,
+            // the presentedTime might includes delays to meet your specified present time. If you want to measure
+            // how much frame you can achieve, use GPUStartTime in the first command buffer of your frame rendering
+            // and GPUEndTime of your last frame rendering to calculate the frame interval."
+            CFTimeInterval lastGPUStartTime = (CFTimeInterval)m_LastGPUStartTime.load();
+            FQLog(@"[%f] dID %lu commandBuffer completed GPUEndTime %f, lastGPUStartTime %f",
+                    CACurrentMediaTime(), (unsigned long)drawable.drawableID, cb.GPUEndTime, lastGPUStartTime);
+            if (lastGPUStartTime > 0.0) {
+                //CFTimeInterval frametime = cb.GPUEndTime - lastGPUStartTime;
+            }
+            m_LastGPUStartTime.store((double)cb.GPUStartTime);
+
+            if (m_HwAccel) {
+                // Free textures after completion of rendering per CVMetalTextureCache requirements
+                for (size_t i = 0; i < planes; i++) {
+                    CFRelease(cvMetalTextures[i]);
+                }
+            }
+        }];
+
+        if (m_UsingVRR.load()) {
+            // VRR: Use the previous frame's duration, while staying within the VRR range
+            // Note that the Vsync checkbox is ignored when VRR is detected.
+            CFTimeInterval duration = m_MinRefreshInterval;
+            if (m_lastPts > 0) {
+                int64_t deltaPts = frame->pts - m_lastPts;
+                if (deltaPts > 0) {
+                    double delta = static_cast<double>(deltaPts) / 90000.0;
+                    duration = std::clamp(delta, m_MinRefreshInterval, m_MaxRefreshInterval);
+
+                    FQLog(@"[VRR] pts %lld, deltaMs %.3f, max/min %.3f/%.3f, present afterMinimumDuration:%.3f ms",
+                        frame->pts, delta * 1000.0, m_MaxRefreshInterval * 1000.0, m_MinRefreshInterval * 1000.0, duration * 1000.0);
+                }
+            }
+            m_lastPts = frame->pts;
+            FQLog(@"[%f] dID %lu VRR presentDrawable afterMinimumDuration:%f pts %.3fms",
+                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0, frame->pts / 90.0);
+            [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
+        }
+        else if (m_MetalLayer.displaySyncEnabled) {
+            // Vsync enabled, lock to the refresh rate. A server that supports
+            // clientRefreshRateX100 is needed if the refresh rate is fractional.
+            CFTimeInterval duration = m_MinRefreshInterval;
+
+            FQLog(@"[%f] dID %lu vsync presentDrawable afterMinimumDuration:%f",
+                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0);
+
+            // Don't delay the first frame
+            if (drawable.drawableID == 0) {
+                [commandBuffer presentDrawable:drawable];
+            }
+            else {
+                [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
+            }
+        }
+        else {
+            // Vsync disabled could look like this but this is a stuttery mess
+            //[commandBuffer presentDrawable:drawable];
+
+            // Can we still use afterMinimumDuration without setting displaySyncEnabled?
+            CFTimeInterval duration = m_MinRefreshInterval;
+            FQLog(@"[%f] dID %lu no-vsync presentDrawable afterMinimumDuration:%f",
+                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0);
+
+            // Don't delay the first frame
+            if (drawable.drawableID == 0) {
+                [commandBuffer presentDrawable:drawable];
+            }
+            else {
+                [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
+            }
+        }
         [commandBuffer commit];
-
-        // Wait for the command buffer to complete and free our CVMetalTextureCache references
-        [commandBuffer waitUntilCompleted];
     }}
+
+    virtual void waitToRender() override
+    {
+        // Wait for a previous drawable to be presented and ready for reuse
+        dispatch_semaphore_wait(m_FrameReady, DISPATCH_TIME_FOREVER);
+    }
 
     // Caller frees frame after we return
     virtual void renderFrame(AVFrame* frame) override
     { @autoreleasepool {
+        if (m_IsPaused.load()) {
+            // we're paused due to being hidden or off screen,
+            // we can just throw away the frame and bump the semaphore.
+            dispatch_semaphore_signal(m_FrameReady);
+            return;
+        }
+
+        m_CurrentBuffer = (m_CurrentBuffer + 1) % m_MaxFramesInFlight;
+
         // Handle changes to the frame's colorspace from last time we rendered
         if (!updateColorSpaceForFrame(frame)) {
             // Trigger the main thread to recreate the decoder
@@ -555,40 +702,18 @@ public:
             return;
         }
 
-        // Start the display link if necessary
-        startDisplayLink();
-
-        if (hasDisplayLink()) {
-            // Move the buffers into a new AVFrame
-            AVFrame* newFrame = av_frame_alloc();
-            av_frame_move_ref(newFrame, frame);
-
-            // Replace any existing unrendered frame with this new one
-            // and signal the CAMetalDisplayLink callback
-            AVFrame* oldFrame = nullptr;
-            SDL_LockMutex(m_FrameLock);
-            if (m_LatestUnrenderedFrame != nullptr) {
-                oldFrame = m_LatestUnrenderedFrame;
-            }
-            m_LatestUnrenderedFrame = newFrame;
-            SDL_UnlockMutex(m_FrameLock);
-            SDL_CondSignal(m_FrameReady);
-
-            av_frame_free(&oldFrame);
+        // Render to the next drawable
+        id<CAMetalDrawable> drawable = [m_MetalLayer nextDrawable];
+        if (drawable == nullptr) {
+            return;
         }
-        else {
-            // Render to the next drawable right now when CAMetalDisplayLink is not in use
-            id<CAMetalDrawable> drawable = [m_MetalLayer nextDrawable];
-            if (drawable == nullptr) {
-                return;
-            }
 
-            renderFrameIntoDrawable(frame, drawable);
-        }
+        renderFrameIntoDrawable(frame, drawable);
     }}
 
     id<MTLDevice> getMetalDevice() {
-        if (qgetenv("VT_FORCE_METAL") == "0") {
+        StreamingPreferences *prefs = StreamingPreferences::get();
+        if (prefs->renderer == StreamingPreferences::RENDERER_AVSAMPLEBUFFER || qgetenv("VT_FORCE_METAL") == "0") {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Avoiding Metal renderer due to VT_FORCE_METAL=0 override.");
             return nullptr;
@@ -602,6 +727,7 @@ public:
         }
 
         for (id<MTLDevice> device in devices) {
+            // choose iGPU on Intel Macs
             if (device.isLowPower || device.hasUnifiedMemory) {
                 return device;
             }
@@ -659,11 +785,14 @@ public:
         }
 
         // Create the Metal texture cache for our CVPixelBuffers
-        CFStringRef keys[1] = { kCVMetalTextureUsage };
-        NSUInteger values[1] = { MTLTextureUsageShaderRead };
-        auto cacheAttributes = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, (const void**)values, 1, nullptr, nullptr);
+        CFStringRef keys[] = { kCVMetalTextureUsage };
+        NSUInteger usage = MTLTextureUsageShaderRead;
+        CFNumberRef usageNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberNSIntegerType, &usage);
+        const void* values[] = { usageNumber };
+        auto cacheAttributes = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, values, 1, nullptr, nullptr);
         err = CVMetalTextureCacheCreate(kCFAllocatorDefault, cacheAttributes, device, nullptr, &m_TextureCache);
         CFRelease(cacheAttributes);
+        CFRelease(usageNumber);
 
         if (err != kCVReturnSuccess) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -684,6 +813,12 @@ public:
         // Create a command queue for submission
         m_CommandQueue = [device newCommandQueue];
 
+        // we'll reuse one renderPassDescriptor by changing its texture
+        m_RenderPassDescriptor = [[MTLRenderPassDescriptor alloc] init];
+        m_RenderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+        m_RenderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        m_RenderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+
         // Add the Metal view to the window if we're not in test-only mode
         //
         // NB: Test-only renderers may be created on a non-main thread, so
@@ -701,16 +836,52 @@ public:
 
             // Choose a device
             m_MetalLayer.device = device;
+            m_MetalLayer.maximumDrawableCount = m_MaxFramesInFlight;
+            m_MetalLayer.allowsNextDrawableTimeout = YES;
 
             // Allow EDR content if we're streaming in a 10-bit format
             m_MetalLayer.wantsExtendedDynamicRangeContent = !!(params->videoFormat & VIDEO_FORMAT_MASK_10BIT);
 
-            // Allow tearing if V-Sync is off (also requires direct display path)
-            m_MetalLayer.displaySyncEnabled = params->enableVsync;
+            // check fullscreen state, VRR, and refresh rate
+            refreshWindowMetadata();
+
+            // SDL's display change detection will call notifyWindowChanged() but there are some Apple-specific
+            // notifications we need to watch out for, such as moving off screen or into the background.
+            m_Observer = [[VTMetalObserver alloc] initWithRenderer:this];
+
+            // I would completely remove the ability to run this renderer without vsync
+            // but someone may want it for something.
+            m_MetalLayer.displaySyncEnabled = YES;
+            if (m_IsFullScreen) {
+                if (!params->enableVsync) {
+                    // Allow v-sync disabled only in fullscreen
+                    m_MetalLayer.displaySyncEnabled = NO;
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "V-sync disabled per request in fullscreen");
+                }
+            }
+            else {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "V-sync enforced when running in a window");
+            }
         }
 
         return true;
     }}
+
+    // static
+    // void displayLinkCallback(const double timestamp, const double targetTimestamp, void* ctx)
+    // {
+    //     auto me = reinterpret_cast<VTMetalRenderer*>(ctx);
+    //     dispatch_semaphore_signal(me->m_VsyncReady);
+    // }
+
+    virtual void prepareToRender() override
+    {
+        // May want this in the future.
+        // Register an extra vsync callback with DisplayLinkSource
+        // DisplayLinkSource::instance().setExtraCallback(displayLinkCallback, this);
+    }
 
     virtual void notifyOverlayUpdated(Overlay::OverlayType type) override
     { @autoreleasepool {
@@ -730,8 +901,13 @@ public:
 
         // If the overlay is disabled, we're done
         if (!overlayEnabled) {
+            showMetalHud(false);
             SDL_FreeSurface(newSurface);
             return;
+        }
+
+        if (StreamingPreferences::get()->showMetalPerformanceHud) {
+            showMetalHud(true);
         }
 
         // Create a texture to hold our pixel data
@@ -742,7 +918,7 @@ public:
                                                                          height:newSurface->h
                                                                       mipmapped:NO];
         texDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
-        texDesc.storageMode = MTLStorageModeManaged;
+        texDesc.storageMode = m_MetalLayer.device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
         texDesc.usage = MTLTextureUsageShaderRead;
         auto newTexture = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
 
@@ -774,44 +950,6 @@ public:
         return true;
     }
 
-    void startDisplayLink()
-    {
-        if (@available(macOS 14, *)) {
-            if (m_MetalDisplayLink != nullptr || !m_MetalLayer.displaySyncEnabled || !isAppleSilicon()) {
-                return;
-            }
-
-            m_MetalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:m_MetalLayer];
-            m_MetalDisplayLink.preferredFrameLatency = 1.0f;
-            m_MetalDisplayLink.preferredFrameRateRange = m_FrameRateRange;
-            m_MetalDisplayLink.delegate = [[DisplayLinkDelegate alloc] initWithRenderer:this];
-            [m_MetalDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-        }
-    }
-
-    void stopDisplayLink()
-    {
-        if (@available(macOS 14, *)) {
-            if (m_MetalDisplayLink == nullptr) {
-                return;
-            }
-
-            [m_MetalDisplayLink invalidate];
-            m_MetalDisplayLink = nullptr;
-        }
-    }
-
-    bool hasDisplayLink()
-    {
-        if (@available(macOS 14, *)) {
-            if (m_MetalDisplayLink != nullptr) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     int getDecoderColorspace() override
     {
         // macOS seems to handle Rec 601 best
@@ -826,8 +964,8 @@ public:
 
     int getRendererAttributes() override
     {
-        // Metal supports HDR output
-        return RENDERER_ATTRIBUTE_HDR_SUPPORT;
+        // Require frame pacing until we switch to our own pacer
+        return RENDERER_ATTRIBUTE_HDR_SUPPORT | RENDERER_ATTRIBUTE_FORCE_PACING;
     }
 
     bool isPixelFormatSupported(int videoFormat, AVPixelFormat pixelFormat) override
@@ -862,8 +1000,67 @@ public:
         }
     }
 
+    void refreshWindowMetadata()
+    {
+        // Get the current window from SDL if it wasn't passed in
+        NSWindow* nswindow = getNSWindow();
+        if (nswindow) {
+            NSScreen* screen = [nswindow screen];
+            if (!screen) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Output display: not found");
+                return;
+            }
+
+            m_MinRefreshInterval = screen.minimumRefreshInterval; // highest Hz
+            m_MaxRefreshInterval = screen.maximumRefreshInterval; // lowest Hz
+
+            bool isVRR = m_MinRefreshInterval != m_MaxRefreshInterval;
+            m_IsFullScreen = ((nswindow.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen);
+            bool isProMotion = screen.displayUpdateGranularity > 0.0;
+
+            if (isProMotion) {
+                // ProMotion displays like MacBook Pro are detected as VRR but behave
+                // badly since they can only operate at 120hz, 60hz, and a few lower rates.
+                // This should also handle the low power use case where it will run at 60hz.
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "ProMotion display detected, treating as a fixed %.2f Hz display",
+                            1.0f / m_MinRefreshInterval);
+                isVRR = false;
+            }
+
+            m_UsingVRR.store(false);
+
+            if (isVRR) {
+                if (m_IsFullScreen) {
+                    m_UsingVRR.store(true);
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Output display: %s / VRR active, refresh range %.2f-%.2f Hz",
+                        [screen.localizedName UTF8String],
+                        1.0f / m_MaxRefreshInterval, 1.0f / m_MinRefreshInterval);
+                }
+                else {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Output display: %s @ %.2f Hz / VRR inactive (not fullscreen)",
+                        [screen.localizedName UTF8String], 1.0f / m_MinRefreshInterval);
+                }
+            }
+            else {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Output display: %s @ %.2f Hz fixed",
+                    [screen.localizedName UTF8String], 1.0f / m_MinRefreshInterval);
+            }
+        }
+    }
+
     bool notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO info) override
     {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Metal renderer is handling window change: %dx%d on display %d",
+                    info->width, info->height, info->displayIndex);
+
+        refreshWindowMetadata();
+
         auto unhandledStateFlags = info->stateChangeFlags;
 
         // We can always handle size changes
@@ -876,76 +1073,110 @@ public:
         return unhandledStateFlags == 0;
     }
 
-    void renderLatestFrameOnDrawable(id<CAMetalDrawable> drawable, CFTimeInterval targetTimestamp)
+    NSWindow* getNSWindow()
     {
-        AVFrame* frame = nullptr;
-
-        // Determine how long we can wait depending on how long our CAMetalDisplayLink
-        // says we have until the next frame needs to be rendered. We will wait up to
-        // half the per-frame interval for a new frame to become available.
-        int waitTimeMs = ((targetTimestamp - CACurrentMediaTime()) * 1000) / 2;
-        if (waitTimeMs < 0) {
-            return;
+        NSWindow *nswindow = nil;
+        SDL_SysWMinfo info;
+        SDL_VERSION(&info.version);
+        if (SDL_GetWindowWMInfo(m_Window, &info) && info.subsystem == SDL_SYSWM_COCOA) {
+            nswindow = (__bridge NSWindow *)info.info.cocoa.window;
         }
+        return nswindow;
+    }
 
-        // Wait for a new frame to be ready
-        SDL_LockMutex(m_FrameLock);
-        if (m_LatestUnrenderedFrame != nullptr || SDL_CondWaitTimeout(m_FrameReady, m_FrameLock, waitTimeMs) == 0) {
-            frame = m_LatestUnrenderedFrame;
-            m_LatestUnrenderedFrame = nullptr;
+    void setPaused(bool isPaused)
+    {
+        m_IsPaused.store(isPaused);
+
+        if (isPaused) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Metal renderer paused, window not visible");
         }
-        SDL_UnlockMutex(m_FrameLock);
-
-        // Render a frame if we got one in time
-        if (frame != nullptr) {
-            renderFrameIntoDrawable(frame, drawable);
-            av_frame_free(&frame);
+        else {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Metal renderer resumed");
         }
     }
+
 
 private:
     bool m_HwAccel;
     SDL_Window* m_Window;
     AVBufferRef* m_HwContext;
     CAMetalLayer* m_MetalLayer;
-    CAMetalDisplayLink* m_MetalDisplayLink API_AVAILABLE(macos(14.0));
     CAFrameRateRange m_FrameRateRange;
-    AVFrame* m_LatestUnrenderedFrame;
-    SDL_mutex* m_FrameLock;
-    SDL_cond* m_FrameReady;
+    dispatch_semaphore_t m_FrameReady;
+    dispatch_semaphore_t m_VsyncReady;
     CVMetalTextureCacheRef m_TextureCache;
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
     SDL_SpinLock m_OverlayLock;
+    MTLRenderPassDescriptor* m_RenderPassDescriptor;
     id<MTLRenderPipelineState> m_VideoPipelineState;
     id<MTLRenderPipelineState> m_OverlayPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
     id<MTLCommandQueue> m_CommandQueue;
-    id<MTLTexture> m_SwMappingTextures[MAX_VIDEO_PLANES];
+    uint32_t m_CurrentBuffer;
+    id<MTLTexture> m_SwMappingTextures[MAX_FRAMES_IN_FLIGHT][MAX_VIDEO_PLANES];
     SDL_MetalView m_MetalView;
     int m_LastFrameWidth;
     int m_LastFrameHeight;
     int m_LastDrawableWidth;
     int m_LastDrawableHeight;
+
+    int m_MaxFramesInFlight;
+    int64_t m_lastPts;
+    bool m_IsFullScreen;
+    CFTimeInterval m_MinRefreshInterval;
+    CFTimeInterval m_MaxRefreshInterval;
+    std::atomic<double> m_LastPresented;
+    std::atomic<double> m_LastGPUStartTime;
+    std::atomic<bool> m_UsingVRR;
+    std::atomic<bool> m_IsPaused;
+    VTMetalObserver* m_Observer;
 };
-
-@implementation DisplayLinkDelegate {
-    VTMetalRenderer* _renderer;
-}
-
-- (id)initWithRenderer:(VTMetalRenderer *)renderer {
-    _renderer = renderer;
-    return self;
-}
-
-- (void)metalDisplayLink:(CAMetalDisplayLink *)link
-             needsUpdate:(CAMetalDisplayLinkUpdate *)update API_AVAILABLE(macos(14.0)) {
-    _renderer->renderLatestFrameOnDrawable(update.drawable, update.targetTimestamp);
-}
-
-@end
 
 IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     return new VTMetalRenderer(hwAccel);
 }
+
+@implementation VTMetalObserver {
+    VTMetalRenderer* _renderer;
+    id _note;
+    id _note2;
+}
+
+- (id)initWithRenderer:(VTMetalRenderer *)renderer {
+    self = [super init];
+    if (self) {
+        _renderer = renderer;
+
+        void (^pauseIfHidden)(NSNotification*) = ^(NSNotification*) {
+            NSWindow* window = _renderer->getNSWindow();
+            bool shouldRender =
+                window.isVisible &&
+                !window.isMiniaturized &&
+                (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+            _renderer->setPaused( !shouldRender );
+        };
+
+        // Pause rendering when off screen or hidden
+        _note = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                                                                  object:nil queue:nil
+                                                              usingBlock:pauseIfHidden];
+        _note2 = [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationWillBecomeActiveNotification
+                                                                  object:nil queue:nil
+                                                              usingBlock:pauseIfHidden];
+
+        // Some notifications we may want
+        //NSApplicationShouldBeginSuppressingHighDynamicRangeContentNotification
+        //NSApplicationShouldEndSuppressingHighDynamicRangeContentNotification
+    }
+    return self;
+}
+
+- (void)stop {
+    if (_note) [[NSNotificationCenter defaultCenter] removeObserver:_note];
+    if (_note2) [[NSNotificationCenter defaultCenter] removeObserver:_note2];
+}
+
+@end

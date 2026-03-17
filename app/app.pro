@@ -404,11 +404,14 @@ macx {
     message(VideoToolbox renderer selected)
 
     SOURCES += \
+        streaming/streamutils_mac.mm \
+        streaming/video/ffmpeg-renderers/pacer/displaylink_source.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
         streaming/video/ffmpeg-renderers/vt_metal.mm
 
     HEADERS += \
+        streaming/video/ffmpeg-renderers/pacer/displaylink_source.h \
         streaming/video/ffmpeg-renderers/vt.h
 }
 discord-rpc {
