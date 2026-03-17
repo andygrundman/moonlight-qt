@@ -52,10 +52,33 @@ struct Vertex
 class VTMetalRenderer;
 @interface VTMetalObserver : NSObject
 
-- (id)initWithRenderer:(VTMetalRenderer *)renderer;
+- (id)initWithRenderer:(VTMetalRenderer *)renderer forWindow:(NSWindow *)window;
 - (void)stop;
 
 @end
+
+// Guard to make sure semaphore is properly signalled on all early exits from renderFrame()
+class DSGuard
+{
+public:
+    explicit DSGuard(dispatch_semaphore_t sem)
+        : m_Sem(sem),
+          m_Armed(true) {}
+
+    ~DSGuard() {
+        if (m_Armed) {
+            dispatch_semaphore_signal(m_Sem);
+        }
+    }
+
+    void disarm() {
+        m_Armed = false;
+    }
+
+private:
+    dispatch_semaphore_t m_Sem;
+    bool m_Armed;
+};
 
 class VTMetalRenderer : public VTBaseRenderer
 {
@@ -66,7 +89,6 @@ public:
           m_Window(nullptr),
           m_HwContext(nullptr),
           m_MetalLayer(nullptr),
-          m_VsyncReady(dispatch_semaphore_create(0)),
           m_TextureCache(nullptr),
           m_CscParamsBuffer(nullptr),
           m_VideoVertexBuffer(nullptr),
@@ -168,6 +190,10 @@ public:
 
     void showMetalHud(bool visible)
     {
+        if (!m_MetalLayer) {
+            return;
+        }
+
         if (@available(macOS 13.0, *)) {
             if (visible) {
                 m_MetalLayer.developerHUDProperties = @{
@@ -344,15 +370,16 @@ public:
         int planes = getFramePlaneCount(frame);
         SDL_assert(planes == 2 || planes == 3);
 
+        NSError* error = nil;
         MTLRenderPipelineDescriptor *pipelineDesc = [[MTLRenderPipelineDescriptor new] autorelease];
         pipelineDesc.vertexFunction = [[m_ShaderLibrary newFunctionWithName:@"vs_draw"] autorelease];
         pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:planes == 2 ? @"ps_draw_biplanar" : @"ps_draw_triplanar"] autorelease];
         pipelineDesc.colorAttachments[0].pixelFormat = m_MetalLayer.pixelFormat;
         [m_VideoPipelineState release];
-        m_VideoPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:nullptr];
+        m_VideoPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
         if (!m_VideoPipelineState) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to create video pipeline state");
+                         "Failed to create video pipeline state: %s", error.localizedDescription.UTF8String);
             return false;
         }
 
@@ -368,10 +395,10 @@ public:
         pipelineDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
         pipelineDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
         [m_OverlayPipelineState release];
-        m_OverlayPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:nullptr];
+        m_OverlayPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
         if (!m_OverlayPipelineState) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to create overlay pipeline state");
+                         "Failed to create overlay pipeline state: %s", error.localizedDescription.UTF8String);
             return false;
         }
 
@@ -425,7 +452,7 @@ public:
                                                                              height:planeHeight
                                                                           mipmapped:NO];
             texDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
-            texDesc.storageMode = MTLStorageModeManaged;
+            texDesc.storageMode = m_MetalLayer.device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
             texDesc.usage = MTLTextureUsageShaderRead;
 
             texture = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
@@ -675,10 +702,11 @@ public:
     // Caller frees frame after we return
     virtual void renderFrame(AVFrame* frame) override
     { @autoreleasepool {
+        DSGuard frameGuard(m_FrameReady);
+
         if (m_IsPaused.load()) {
             // we're paused due to being hidden or off screen,
-            // we can just throw away the frame and bump the semaphore.
-            dispatch_semaphore_signal(m_FrameReady);
+            // we can just throw away the frame and bump the semaphore (via the guard).
             return;
         }
 
@@ -708,6 +736,7 @@ public:
             return;
         }
 
+        frameGuard.disarm();
         renderFrameIntoDrawable(frame, drawable);
     }}
 
@@ -753,10 +782,7 @@ public:
     virtual bool initialize(PDECODER_PARAMETERS params) override
     { @autoreleasepool {
         int err;
-
         m_Window = params->window;
-        m_FrameRateRange = CAFrameRateRangeMake(params->frameRate, params->frameRate, params->frameRate);
-
         id<MTLDevice> device = getMetalDevice();
         if (!device) {
             m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
@@ -802,11 +828,12 @@ public:
         }
 
         // Compile our shaders
+        NSError* error = nil;
         QString shaderSource = QString::fromUtf8(Path::readDataFile("vt_renderer.metal"));
-        m_ShaderLibrary = [device newLibraryWithSource:shaderSource.toNSString() options:nullptr error:nullptr];
+        m_ShaderLibrary = [device newLibraryWithSource:shaderSource.toNSString() options:nullptr error:&error];
         if (!m_ShaderLibrary) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to compile shaders");
+                         "Failed to compile shaders: %s", error.localizedDescription.UTF8String);
             return false;
         }
 
@@ -845,10 +872,6 @@ public:
             // check fullscreen state, VRR, and refresh rate
             refreshWindowMetadata();
 
-            // SDL's display change detection will call notifyWindowChanged() but there are some Apple-specific
-            // notifications we need to watch out for, such as moving off screen or into the background.
-            m_Observer = [[VTMetalObserver alloc] initWithRenderer:this];
-
             // I would completely remove the ability to run this renderer without vsync
             // but someone may want it for something.
             m_MetalLayer.displaySyncEnabled = YES;
@@ -868,20 +891,6 @@ public:
 
         return true;
     }}
-
-    // static
-    // void displayLinkCallback(const double timestamp, const double targetTimestamp, void* ctx)
-    // {
-    //     auto me = reinterpret_cast<VTMetalRenderer*>(ctx);
-    //     dispatch_semaphore_signal(me->m_VsyncReady);
-    // }
-
-    virtual void prepareToRender() override
-    {
-        // May want this in the future.
-        // Register an extra vsync callback with DisplayLinkSource
-        // DisplayLinkSource::instance().setExtraCallback(displayLinkCallback, this);
-    }
 
     virtual void notifyOverlayUpdated(Overlay::OverlayType type) override
     { @autoreleasepool {
@@ -1012,6 +1021,14 @@ public:
                 return;
             }
 
+            // SDL's display change detection will call notifyWindowChanged() but there are some Apple-specific
+            // notifications we need to watch out for, such as moving off screen or into the background.
+            if (m_Observer != nil) {
+                [m_Observer stop];
+                m_Observer = nil;
+            }
+            m_Observer = [[VTMetalObserver alloc] initWithRenderer:this forWindow:nswindow];
+
             m_MinRefreshInterval = screen.minimumRefreshInterval; // highest Hz
             m_MaxRefreshInterval = screen.maximumRefreshInterval; // lowest Hz
 
@@ -1102,9 +1119,7 @@ private:
     SDL_Window* m_Window;
     AVBufferRef* m_HwContext;
     CAMetalLayer* m_MetalLayer;
-    CAFrameRateRange m_FrameRateRange;
     dispatch_semaphore_t m_FrameReady;
-    dispatch_semaphore_t m_VsyncReady;
     CVMetalTextureCacheRef m_TextureCache;
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
@@ -1142,41 +1157,33 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
 @implementation VTMetalObserver {
     VTMetalRenderer* _renderer;
     id _note;
-    id _note2;
 }
 
-- (id)initWithRenderer:(VTMetalRenderer *)renderer {
+- (id)initWithRenderer:(VTMetalRenderer *)renderer forWindow:(NSWindow *)window {
     self = [super init];
     if (self) {
         _renderer = renderer;
 
-        void (^pauseIfHidden)(NSNotification*) = ^(NSNotification*) {
-            NSWindow* window = _renderer->getNSWindow();
+        void (^pauseIfHidden)(NSNotification*) = ^(NSNotification *note) {
+            NSWindow* _window = (NSWindow *)note.object;
             bool shouldRender =
-                window.isVisible &&
-                !window.isMiniaturized &&
-                (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+                _window.isVisible &&
+                !_window.isMiniaturized &&
+                (_window.occlusionState & NSWindowOcclusionStateVisible) != 0;
             _renderer->setPaused( !shouldRender );
         };
 
         // Pause rendering when off screen or hidden
         _note = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification
-                                                                  object:nil queue:nil
+                                                                  object:window
+                                                                   queue:nil
                                                               usingBlock:pauseIfHidden];
-        _note2 = [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationWillBecomeActiveNotification
-                                                                  object:nil queue:nil
-                                                              usingBlock:pauseIfHidden];
-
-        // Some notifications we may want
-        //NSApplicationShouldBeginSuppressingHighDynamicRangeContentNotification
-        //NSApplicationShouldEndSuppressingHighDynamicRangeContentNotification
     }
     return self;
 }
 
 - (void)stop {
     if (_note) [[NSNotificationCenter defaultCenter] removeObserver:_note];
-    if (_note2) [[NSNotificationCenter defaultCenter] removeObserver:_note2];
 }
 
 @end
