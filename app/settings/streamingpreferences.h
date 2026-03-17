@@ -109,6 +109,13 @@ public:
     };
     Q_ENUM(CaptureSysKeysMode);
 
+    enum Renderer
+    {
+        RENDERER_VT_METAL,
+        RENDERER_AVSAMPLEBUFFER,
+    };
+    Q_ENUM(Renderer)
+
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
     Q_PROPERTY(int fps MEMBER fps NOTIFY displayModeChanged)
@@ -145,7 +152,10 @@ public:
     Q_PROPERTY(bool swapFaceButtons MEMBER swapFaceButtons NOTIFY swapFaceButtonsChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
-    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
+    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged)
+    Q_PROPERTY(Renderer renderer MEMBER renderer NOTIFY rendererChanged)
+    Q_PROPERTY(int vtMetalFramesInFlight MEMBER vtMetalFramesInFlight NOTIFY vtMetalFramesInFlightChanged)
+    Q_PROPERTY(bool showMetalPerformanceHud MEMBER showMetalPerformanceHud NOTIFY showMetalPerformanceHudChanged);
 
     Q_INVOKABLE bool retranslate();
 
@@ -188,6 +198,9 @@ public:
     UIDisplayMode uiDisplayMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
+    Renderer renderer;
+    int vtMetalFramesInFlight;
+    bool showMetalPerformanceHud;
 
 signals:
     void displayModeChanged();
@@ -225,6 +238,9 @@ signals:
     void captureSysKeysModeChanged();
     void keepAwakeChanged();
     void languageChanged();
+    void rendererChanged();
+    void vtMetalFramesInFlightChanged();
+    void showMetalPerformanceHudChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);
