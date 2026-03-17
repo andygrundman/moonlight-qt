@@ -2,6 +2,13 @@
 
 #include "SDL_compat.h"
 
+struct RefreshRateRational {
+    int32_t numerator;
+    int32_t denominator;
+    double hz;
+    bool valid;
+};
+
 class StreamUtils
 {
 public:
@@ -25,6 +32,9 @@ public:
 
     static
     int getDisplayRefreshRate(SDL_Window* window);
+
+    static
+    RefreshRateRational getDisplayRefreshRateRational(SDL_Window* window);
 
     static
     bool hasFastAes();
