@@ -200,13 +200,6 @@ RefreshRateRational StreamUtils::getDisplayRefreshRateRational(SDL_Window* windo
 {
     int refresh_rate = getDisplayRefreshRate(window);
 
-    struct RefreshRateRational {
-        int32_t numerator;
-        int32_t denominator;
-        double hz;
-        bool valid;
-    };
-
     RefreshRateRational result {refresh_rate, 1, (double)refresh_rate, true};
     return result;
 }
