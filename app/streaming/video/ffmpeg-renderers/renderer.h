@@ -298,7 +298,8 @@ public:
     virtual void prepareToRender() {
         // Allow renderers to perform any final preparations for
         // rendering after they have been selected to render. Such
-        // preparations might include clearing the window.
+        // preparations might include clearing the window or registering
+        // a vsync callback.
     }
 
     RendererType getRendererType() {
