@@ -1,7 +1,7 @@
 #pragma once
 
 #include "renderer.h"
-#include "pacer/pacer.h"
+#include "framepacing/framepacer.h"
 
 #include <d3d9.h>
 #include <dxva2api.h>
