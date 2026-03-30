@@ -97,9 +97,11 @@ Column {
             }
 
             ToolTip.delay: 1000
-            ToolTip.timeout: 5000
+            ToolTip.timeout: -1
             ToolTip.visible: hovered
-            ToolTip.text: qsTr("Choose the macOS renderer backend.")
+            ToolTip.text:
+                qsTr("Metal is the modern advanced renderer. All other options in this section require Metal.\n\n") +
+                qsTr("AVSampleBuffer lets macOS control the rendering and can be used if Metal doesn't work for you.")
         }
 
         AutoResizingComboBox {
@@ -145,9 +147,9 @@ Column {
             }
 
             ToolTip.delay: 1000
-            ToolTip.timeout: 5000
+            ToolTip.timeout: -1
             ToolTip.visible: hovered
-            ToolTip.text: qsTr("Sets the maximum number of frames in flight for the Metal CPU to GPU pipeline. 2 frames has lower latency. 3 frames is often more stable at high frame rates.")
+            ToolTip.text: qsTr("Use 2 frames for lower latency. 3 frames may be needed for higher framerates.")
         }
 
         Label {
@@ -157,30 +159,11 @@ Column {
             Layout.fillWidth: true
         }
 
-        Item {
+        Label {
+            text: qsTr("Frame pacing mode")
+            font.pointSize: 12
+            wrapMode: Text.Wrap
             Layout.fillWidth: true
-            Layout.preferredHeight: metalHudCheck.visible ? metalHudCheck.implicitHeight : 0
-
-            CheckBox {
-                id: metalHudCheck
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-
-                text: qsTr("Show Metal Performance HUD")
-                font.pointSize: 12
-                visible: Qt.platform.os === "osx" &&
-                         (!rendererComboBox.visible ||
-                          StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL)
-                checked: StreamingPreferences.showMetalPerformanceHud
-                onCheckedChanged: {
-                    StreamingPreferences.showMetalPerformanceHud = checked
-                }
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: 5000
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Display Apple's Metal Performance HUD when viewing stats. Use Shift-F10 to cycle additional views.")
-            }
         }
 
         AutoResizingComboBox {
@@ -194,12 +177,10 @@ Column {
             function createModel() {
                 var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', root, '')
 
-                if (Qt.platform.os !== "osx") {
-                    model.append({
-                        text: qsTr("Fullscreen"),
-                        val: StreamingPreferences.WM_FULLSCREEN
-                    })
-                }
+                model.append({
+                    text: qsTr("Fullscreen"),
+                    val: StreamingPreferences.WM_FULLSCREEN
+                })
 
                 model.append({
                     text: qsTr("Borderless windowed"),
@@ -236,61 +217,196 @@ Column {
             }
 
             ToolTip.delay: 1000
-            ToolTip.timeout: 5000
+            ToolTip.timeout: -1
             ToolTip.visible: hovered
             ToolTip.text: Qt.platform.os === "osx"
                 ? qsTr("Borderless windowed generally provides the best performance. When used with an external VRR display, VRR will be enabled automatically.")
                 : qsTr("Fullscreen generally provides the best performance, but borderless windowed may work better with features like Alt+Tab, screenshot tools, and overlays.")
         }
 
-        Item {
-            Layout.fillWidth: true
-        }
-
-        CheckBox {
-            id: vsyncCheck
-            Layout.columnSpan: 2
+        AutoResizingComboBox {
+            id: framePacingComboBox
             Layout.fillWidth: true
             hoverEnabled: true
-            text: qsTr("V-Sync")
-            font.pointSize: 12
-            checked: StreamingPreferences.enableVsync
-            enabled: Qt.platform.os === "osx"
-                ? (StreamingPreferences.windowMode === StreamingPreferences.WM_FULLSCREEN_DESKTOP)
-                : true
+            textRole: "text"
+            enabled: !rendererComboBox.visible ||
+                     StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
 
-            onCheckedChanged: {
-                StreamingPreferences.enableVsync = checked
+            model: ListModel {
+                id: framePacingListModel
+
+                ListElement {
+                    text: qsTr("Immediate (recommended)")
+                    val: StreamingPreferences.FRAME_PACING_IMMEDIATE
+                }
+
+                ListElement {
+                    text: qsTr("Display-locked")
+                    val: StreamingPreferences.FRAME_PACING_DISPLAY_LOCKED
+                }
+            }
+
+            Component.onCompleted: {
+                currentIndex = 0
+                for (var i = 0; i < framePacingListModel.count; i++) {
+                    if (StreamingPreferences.framePacingMode === framePacingListModel.get(i).val) {
+                        currentIndex = i
+                        break
+                    }
+                }
+
+                activated(currentIndex)
+            }
+
+            onActivated: {
+                StreamingPreferences.framePacingMode = framePacingListModel.get(currentIndex).val
             }
 
             ToolTip.delay: 1000
-            ToolTip.timeout: 5000
+            ToolTip.timeout: -1
             ToolTip.visible: hovered
-            ToolTip.text: Qt.platform.os === "osx"
-                ? qsTr("V-Sync is always enabled on macOS in windowed mode and when using VRR. It can be disabled in borderless mode.")
-                : qsTr("Disabling V-Sync allows sub-frame rendering latency, but it can display visible tearing")
+            ToolTip.text:
+                qsTr("Immediate: renders frames as they arrive, either with or without vsync. When the stream fps drops below max, stutters may occur.\n\n") +
+                qsTr("Display-locked: renders at the client refresh rate and displays new or repeat frames according to the PTS timestamp. Best for: lower fps content, video, film.")
         }
 
-        CheckBox {
-            id: framePacingCheck
-            Layout.columnSpan: 2
+        Label {
+            text: qsTr("Present mode")
+            font.pointSize: 12
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+
+        Label {
+            text: qsTr("Stats")
+            font.pointSize: 12
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+
+        AutoResizingComboBox {
+            id: presentModeComboBox
             Layout.fillWidth: true
             hoverEnabled: true
-            text: Qt.platform.os === "osx" ? qsTr("Frame pacing (always enabled)") : qsTr("Frame pacing")
-            font.pointSize: 12
-            enabled: Qt.platform.os === "osx" ? false : StreamingPreferences.enableVsync
-            checked: Qt.platform.os === "osx" || (StreamingPreferences.enableVsync && StreamingPreferences.framePacing)
+            textRole: "text"
+            enabled: !rendererComboBox.visible ||
+                     StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
 
-            onCheckedChanged: {
-                StreamingPreferences.framePacing = checked
+            model: ListModel {
+                id: presentModeListModel
+
+                ListElement {
+                    text: qsTr("Auto (recommended)")
+                    val: StreamingPreferences.PRESENT_AUTO
+                }
+
+                ListElement {
+                    text: qsTr("Fixed Vsync")
+                    val: StreamingPreferences.PRESENT_FIXED
+                }
+
+                ListElement {
+                    text: qsTr("VRR")
+                    val: StreamingPreferences.PRESENT_VRR
+                }
+
+                ListElement {
+                    text: qsTr("No Vsync")
+                    val: StreamingPreferences.PRESENT_NO_VSYNC
+                }
+            }
+
+            Component.onCompleted: {
+                currentIndex = 0
+                for (var i = 0; i < presentModeListModel.count; i++) {
+                    if (StreamingPreferences.presentMode === presentModeListModel.get(i).val) {
+                        currentIndex = i
+                        break
+                    }
+                }
+
+                activated(currentIndex)
+            }
+
+            onActivated: {
+                StreamingPreferences.presentMode = presentModeListModel.get(currentIndex).val
             }
 
             ToolTip.delay: 1000
-            ToolTip.timeout: 5000
+            ToolTip.timeout: -1
             ToolTip.visible: hovered
-            ToolTip.text: Qt.platform.os === "osx"
-                ? qsTr("Frame pacing is always enabled on macOS")
-                : qsTr("Frame pacing reduces micro-stutter by delaying frames that come in too early")
+            ToolTip.text:
+                qsTr("Auto: Will use VRR when possible, otherwise Fixed.\n\n") +
+                qsTr("Fixed (Vsync): aligns frames to the vsync interval.\n\n") +
+                qsTr("VRR: Frames are presented at varying intervals within the monitor's supported range. Low latency with no tearing.\n\n") +
+                qsTr("No Vsync: presents frames with no delay, for the lowest latency at the cost of screen tearing.")
+        }
+
+        Column {
+            spacing: 2
+
+            CheckBox {
+                id: performanceStatsCheck
+                Layout.fillWidth: true
+                hoverEnabled: true
+                text: qsTr("Show performance stats")
+                font.pointSize: 12
+                checked: StreamingPreferences.showPerformanceOverlay
+
+                onCheckedChanged: {
+                    StreamingPreferences.showPerformanceOverlay = checked
+                }
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: -1
+                ToolTip.visible: hovered
+                ToolTip.text:
+                    qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
+                    qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
+                    qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
+            }
+
+            CheckBox {
+                id: performanceGraphsCheck
+                Layout.fillWidth: true
+                hoverEnabled: true
+                text: qsTr("Show performance graphs")
+                font.pointSize: 12
+                checked: StreamingPreferences.showPerformanceGraphs
+                enabled: !rendererComboBox.visible ||
+                         StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
+
+                onCheckedChanged: {
+                    StreamingPreferences.showPerformanceGraphs = checked
+                }
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: -1
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr(
+                    "Displays realtime graphs for monitoring Frametime, Host Frametime, Present Delay, Dropped Frames, and Network Mbps. Click on a graph to view a larger version.")
+            }
+
+            CheckBox {
+                id: developerUICheck
+                Layout.fillWidth: true
+                hoverEnabled: true
+                text: qsTr("Enable Advanced UI")
+                font.pointSize: 12
+                checked: StreamingPreferences.enableDeveloperUI
+                enabled: !rendererComboBox.visible ||
+                         StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
+
+                onCheckedChanged: {
+                    StreamingPreferences.enableDeveloperUI = checked
+                }
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: -1
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr(
+                    "Change various rendering settings in realtime and view more detailed metrics. Use this to experiment with different frame pacing and present settings.")
+            }
         }
 
         CheckBox {

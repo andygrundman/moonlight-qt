@@ -3,10 +3,11 @@ SUBDIRS = \
     moonlight-common-c \
     qmdnsengine \
     app \
-    h264bitstream
+    h264bitstream \
+    imgui
 
 # Build the dependencies in parallel before the final app
-app.depends = qmdnsengine moonlight-common-c h264bitstream
+app.depends = qmdnsengine moonlight-common-c h264bitstream imgui
 win32:!winrt {
     SUBDIRS += AntiHooking
     app.depends += AntiHooking

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pacer.h"
+#include "../framepacing/framepacer.h"
 
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
@@ -8,7 +8,7 @@
 class WaylandVsyncSource : public IVsyncSource
 {
 public:
-    WaylandVsyncSource(Pacer* pacer);
+    WaylandVsyncSource(IFramePacer* pacer);
 
     virtual ~WaylandVsyncSource();
 
@@ -21,7 +21,7 @@ private:
 
     static const struct wl_callback_listener s_FrameListener;
 
-    Pacer* m_Pacer;
+    IFramePacer* m_Pacer;
     wl_display* m_Display;
     wl_surface* m_Surface;
     wl_callback* m_Callback;
