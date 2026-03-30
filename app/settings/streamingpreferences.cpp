@@ -52,8 +52,11 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
+#define SER_FRAMEPACINGMODE "framePacingMode"
+#define SER_FRAMEPRESENTMODE "presentMode"
+#define SER_SHOWPERFORMANCEGRAPHS "showPerformanceGraphs"
+#define SER_ENABLEDEVELOPERUI "enableDeveloperUI"
 #define SER_VTMETALFRAMESINFLIGHT "vtMetalFramesInFlight"
-#define SER_SHOWMETALPERFORMANCEHUD "showMetalPerformanceHud"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -173,8 +176,21 @@ void StreamingPreferences::reload()
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
     renderer = static_cast<Renderer>(settings.value(SER_RENDERER,
                                                     static_cast<int>(Renderer::RENDERER_VT_METAL)).toInt());
+    framePacingMode = static_cast<FramePacingMode>(settings.value(SER_FRAMEPACINGMODE,
+                                                   static_cast<int>(FramePacingMode::FRAME_PACING_IMMEDIATE)).toInt());
+    presentMode = static_cast<PresentMode>(settings.value(SER_FRAMEPRESENTMODE,
+                                                    static_cast<int>(PresentMode::PRESENT_AUTO)).toInt());
+    showPerformanceGraphs = settings.value(SER_SHOWPERFORMANCEGRAPHS, false).toBool();
+    enableDeveloperUI = settings.value(SER_ENABLEDEVELOPERUI, false).toBool();
     vtMetalFramesInFlight = settings.value(SER_VTMETALFRAMESINFLIGHT, 3).toInt();
-    showMetalPerformanceHud = settings.value(SER_SHOWMETALPERFORMANCEHUD, false).toBool();
+
+    // old enableVsync is now based on presentMode
+    if (presentMode == PresentMode::PRESENT_NO_VSYNC) {
+        enableVsync = false;
+    }
+    else {
+        enableVsync = true;
+    }
 
 
     // Perform default settings updates as required based on last default version
@@ -366,8 +382,11 @@ void StreamingPreferences::save()
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
     settings.setValue(SER_RENDERER, static_cast<int>(renderer));
+    settings.setValue(SER_FRAMEPACINGMODE, static_cast<int>(framePacingMode));
+    settings.setValue(SER_FRAMEPRESENTMODE, static_cast<int>(presentMode));
+    settings.setValue(SER_SHOWPERFORMANCEGRAPHS, showPerformanceGraphs);
+    settings.setValue(SER_ENABLEDEVELOPERUI, enableDeveloperUI);
     settings.setValue(SER_VTMETALFRAMESINFLIGHT, vtMetalFramesInFlight);
-    settings.setValue(SER_SHOWMETALPERFORMANCEHUD, showMetalPerformanceHud);
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)

@@ -1,5 +1,6 @@
 #include "streaming/session.h"
 
+#include "imgui.h"
 #include <Limelight.h>
 #include "SDL_compat.h"
 
@@ -178,6 +179,14 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     short keyCode;
     char modifiers;
     bool shouldNotConvertToScanCodeOnServer = false;
+
+#ifndef IMGUI_DISABLE
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantCaptureKeyboard) {
+        // ImGui has control of the keyboard
+        return;
+    }
+#endif
 
     if (event->repeat) {
         // Ignore repeat key down events

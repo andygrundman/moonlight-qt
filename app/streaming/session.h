@@ -129,6 +129,8 @@ public:
 
     void setShouldExit(bool quitHostApp = false);
 
+    void toggleMouseEmulation(SDL_JoystickID jsid);
+
 signals:
     void stageStarting(QString stage);
 

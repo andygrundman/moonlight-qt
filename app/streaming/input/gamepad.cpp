@@ -3,6 +3,7 @@
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "settings/mappingmanager.h"
+#include "imgui/gamepadmenu.h"
 
 #include <QtMath>
 
@@ -151,6 +152,30 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
     }
 
     LiSendControllerBatteryEvent(state->index, batteryState, batteryPercentage);
+}
+
+void SdlInputHandler::toggleMouseEmulation(SDL_JoystickID jsid)
+{
+    GamepadState* state = findStateForGamepad(jsid);
+    if (state == NULL) {
+        return;
+    }
+
+    if (state->mouseEmulationTimer != 0) {
+        SDL_RemoveTimer(state->mouseEmulationTimer);
+        state->mouseEmulationTimer = 0;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Mouse emulation deactivated");
+        Session::get()->notifyMouseEmulationMode(false);
+    }
+    else {
+        state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Mouse emulation active");
+        Session::get()->notifyMouseEmulationMode(true);
+    }
 }
 
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
@@ -363,6 +388,23 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
     }
 
+#ifndef IMGUI_DISABLED
+    // Start+Select is now the only combo and it brings up an ImGui menu
+    static bool g_ShowGamepadMenu = false;
+
+    if (state->buttons == (PLAY_FLAG | BACK_FLAG)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Detected menu gamepad button combo");
+
+        g_ShowGamepadMenu = !g_ShowGamepadMenu;
+        GamepadMenu::instance().SetVisible(g_ShowGamepadMenu, event->which);
+
+        // Clear buttons down on this gamepad
+        LiSendMultiControllerEvent(state->index, m_GamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+        return;
+    }
+#else
     // Handle Start+Select+L1+R1 as a gamepad quit combo
     if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -394,6 +436,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                                    0, 0, 0, 0, 0, 0, 0);
         return;
     }
+#endif
 
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {

@@ -14,3 +14,14 @@
 [submodule "pyrowave"]
 	path = pyrowave
 	url = https://github.com/andygrundman/pyrowave.git
+[submodule "libs"]
+	path = libs
+	url = https://github.com/cgutman/moonlight-qt-prebuilts.git
+	shallow = true
+[submodule "imgui/imgui"]
+	path = imgui/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking
+[submodule "imgui/implot"]
+	path = imgui/implot
+	url = https://github.com/epezent/implot.git
