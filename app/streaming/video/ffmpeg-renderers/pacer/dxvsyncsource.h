@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pacer.h"
+#include "../framepacing/framepacer.h"
 
 #include <SDL_syswm.h>
 
@@ -31,7 +31,7 @@ typedef NTSTATUS(APIENTRY* PFND3DKMTWAITFORVERTICALBLANKEVENT)(D3DKMT_WAITFORVER
 class DxVsyncSource : public IVsyncSource
 {
 public:
-    DxVsyncSource(Pacer* pacer);
+    DxVsyncSource(IFramePacer* pacer);
 
     virtual ~DxVsyncSource();
 
@@ -42,7 +42,7 @@ public:
     virtual void waitForVsync() override;
 
 private:
-    Pacer* m_Pacer;
+    IFramePacer* m_Pacer;
     HMODULE m_Gdi32Handle;
     HWND m_Window;
     HMONITOR m_LastMonitor;

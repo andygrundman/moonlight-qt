@@ -3,6 +3,10 @@
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
 
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui/devui.h"
+
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "path.h"
@@ -584,6 +588,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
 
+    // Pass initial settings to DevUI panel
+    DevUISettings::instance().InitFromPrefs(*m_Preferences);
+
 #ifdef Q_OS_DARWIN
     if (qEnvironmentVariableIntValue("I_WANT_BUGGY_FULLSCREEN") == 0) {
         // If we have a notch and the user specified one of the two native display modes
@@ -672,6 +679,10 @@ bool Session::initialize(QQuickWindow* qtWindow)
                 m_StreamConfig.clientRefreshRateX100 = 2997 * (m_StreamConfig.fps / 30);
             }
         }
+
+        // XXX request a slightly lower framerate (0.1%)
+        // m_StreamConfig.clientRefreshRateX100 -= lround(refreshRate.hz / 10.0);
+
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Set clientRefreshRateX100=%d for precise refresh rate %.2fHz (%d/%d)",
                     m_StreamConfig.clientRefreshRateX100, refreshRate.hz,
@@ -1996,6 +2007,18 @@ void Session::exec()
             continue;
         }
 #endif
+
+#ifndef IMGUI_DISABLE
+        // let ImGui read keyboard/mouse events. If interacting with a UI element, we will check
+        // io.WantCaptureMouse and io.WantCaptureKeyboard below
+        if (ImGui::GetCurrentContext()) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.BackendPlatformUserData != nullptr) {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+            }
+        }
+#endif
+
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2376,4 +2399,11 @@ DispatchDeferredCleanup:
     // When it is complete, it will release our s_ActiveSessionSemaphore
     // reference.
     QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
+}
+
+void Session::toggleMouseEmulation(SDL_JoystickID jsid)
+{
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->toggleMouseEmulation(jsid);
+    }
 }
