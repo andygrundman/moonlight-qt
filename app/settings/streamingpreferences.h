@@ -110,10 +110,26 @@ public:
 
     enum Renderer
     {
-        RENDERER_VT_METAL,
-        RENDERER_AVSAMPLEBUFFER,
+        RENDERER_VT_METAL = 0,
+        RENDERER_AVSAMPLEBUFFER = 1,
     };
     Q_ENUM(Renderer)
+
+    enum FramePacingMode
+    {
+        FRAME_PACING_IMMEDIATE = 0,
+        FRAME_PACING_DISPLAY_LOCKED = 1,
+    };
+    Q_ENUM(FramePacingMode)
+
+    enum PresentMode
+    {
+        PRESENT_AUTO = 0,
+        PRESENT_FIXED = 1,
+        PRESENT_VRR = 2,
+        PRESENT_NO_VSYNC = 3,
+    };
+    Q_ENUM(PresentMode)
 
     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
@@ -153,8 +169,11 @@ public:
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
     Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged)
     Q_PROPERTY(Renderer renderer MEMBER renderer NOTIFY rendererChanged)
+    Q_PROPERTY(FramePacingMode framePacingMode MEMBER framePacingMode NOTIFY framePacingModeChanged)
+    Q_PROPERTY(PresentMode presentMode MEMBER presentMode NOTIFY presentModeChanged)
+    Q_PROPERTY(bool showPerformanceGraphs MEMBER showPerformanceGraphs NOTIFY showPerformanceGraphsChanged)
+    Q_PROPERTY(bool enableDeveloperUI MEMBER enableDeveloperUI NOTIFY enableDeveloperUIChanged)
     Q_PROPERTY(int vtMetalFramesInFlight MEMBER vtMetalFramesInFlight NOTIFY vtMetalFramesInFlightChanged)
-    Q_PROPERTY(bool showMetalPerformanceHud MEMBER showMetalPerformanceHud NOTIFY showMetalPerformanceHudChanged);
 
     Q_INVOKABLE bool retranslate();
 
@@ -198,8 +217,11 @@ public:
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     Renderer renderer;
+    FramePacingMode framePacingMode;
+    PresentMode presentMode;
+    bool showPerformanceGraphs;
+    bool enableDeveloperUI;
     int vtMetalFramesInFlight;
-    bool showMetalPerformanceHud;
 
 signals:
     void displayModeChanged();
@@ -238,8 +260,11 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererChanged();
+    void framePacingModeChanged();
+    void presentModeChanged();
+    void showPerformanceGraphsChanged();
+    void enableDeveloperUIChanged();
     void vtMetalFramesInFlightChanged();
-    void showMetalPerformanceHudChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

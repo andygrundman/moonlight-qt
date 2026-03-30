@@ -3,15 +3,27 @@
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
 #include "pacer/displaylink_source.h"
-#include "pacer/pacer.h"
 #undef AVMediaType
 
+#include "imgui.h"
+//#include "imgui_impl_osx.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_metal.h"
+#include "implot.h"
+
 #include <algorithm>
+#include "SDL_compat.h"
 #include <SDL_syswm.h>
 #include <Limelight.h>
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
+#include "framepacing/framequeue.h"
+#include "framepacing/framepacer.h"
 #include "path.h"
+#include "imgui/devui.h"
+#include "imgui/gamepadmenu.h"
+#include "imgui/imgui_plots.h"
+#include "streaming/stats.h"
 
 #import <Cocoa/Cocoa.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -43,6 +55,37 @@ struct Vertex
     simd_float2 texCoord;
 };
 
+// tracks in-flight frames and present-to-display latency
+// Note that these are in seconds
+struct PresentedFrameInfo
+{
+    uint64_t drawableId;
+    int presentMode;
+    int pacingMode;
+    CFTimeInterval submittedPresentTime;
+    CFTimeInterval atTime;
+    CFTimeInterval afterMinimumDuration;
+    CFTimeInterval vsyncTimestamp;
+    CFTimeInterval vsyncDeadline;
+    bool late;
+};
+
+// store any data used by present callbacks in something other than the VTMetalRenderer object.
+// If we don't do this, we can crash during destruction.
+struct PresentCallbackState
+{
+    std::mutex pendingFramesMutex;
+    std::deque<PresentedFrameInfo> pendingFrames;
+    std::atomic<bool> stopping{false};
+
+    std::atomic<int> callbacksInFlight{0};
+    std::mutex callbacksMutex;
+    std::condition_variable callbacksCv;
+
+    std::atomic<double> lastPresented{0.0};
+    std::atomic<double> averageGPUTime{1.0 / 240.0};
+};
+
 // https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/TripleBuffering.html
 // https://developer.apple.com/documentation/metal/synchronizing-cpu-and-gpu-work?language=objc
 #define MAX_FRAMES_IN_FLIGHT 3
@@ -57,29 +100,6 @@ class VTMetalRenderer;
 
 @end
 
-// Guard to make sure semaphore is properly signalled on all early exits from renderFrame()
-class DSGuard
-{
-public:
-    explicit DSGuard(dispatch_semaphore_t sem)
-        : m_Sem(sem),
-          m_Armed(true) {}
-
-    ~DSGuard() {
-        if (m_Armed) {
-            dispatch_semaphore_signal(m_Sem);
-        }
-    }
-
-    void disarm() {
-        m_Armed = false;
-    }
-
-private:
-    dispatch_semaphore_t m_Sem;
-    bool m_Armed;
-};
-
 class VTMetalRenderer : public VTBaseRenderer
 {
 public:
@@ -90,6 +110,7 @@ public:
           m_HwContext(nullptr),
           m_MetalLayer(nullptr),
           m_TextureCache(nullptr),
+          m_CVMetalTextures{},
           m_CscParamsBuffer(nullptr),
           m_VideoVertexBuffer(nullptr),
           m_OverlayTextures{},
@@ -99,6 +120,7 @@ public:
           m_OverlayPipelineState(nullptr),
           m_ShaderLibrary(nullptr),
           m_CommandQueue(nullptr),
+          m_CommandBuffer{},
           m_CurrentBuffer(0),
           m_SwMappingTextures{},
           m_MetalView(nullptr),
@@ -106,25 +128,47 @@ public:
           m_LastFrameHeight(-1),
           m_LastDrawableWidth(-1),
           m_LastDrawableHeight(-1),
-          m_lastPts(0),
           m_IsFullScreen(false),
+          m_ProMotionAllowsVRR(false),
+          m_UsePTSForVRR(false),
+          m_UseEDR(false),
+          m_ShowMetalHUD(false),
+          m_MaxPotentialEDR(1.0),
+          m_CurrentEDR(1.0),
+          m_MaxReferenceEDR(1.0),
+          m_RequestedPresentMode(StreamingPreferences::PRESENT_AUTO),
           m_MinRefreshInterval(1.0f / 60),
           m_MaxRefreshInterval(1.0f / 60),
-          m_LastPresented{0.0},
-          m_LastGPUStartTime{0.0},
           m_UsingVRR{false},
           m_IsPaused{false},
-          m_Observer(nil)
+          m_IsVsync{true},
+          m_VsyncTimestamp{0.0},
+          m_VsyncDeadline{0.0},
+          m_Observer(nil),
+          m_IsGPUCapturing(false),
+          m_Drawable(nil),
+          m_CurrentDrawableID(0)
     {
         StreamingPreferences *prefs = StreamingPreferences::get();
-        m_MaxFramesInFlight = SDL_min(prefs->vtMetalFramesInFlight, MAX_FRAMES_IN_FLIGHT);
-        m_FrameReady = dispatch_semaphore_create(m_MaxFramesInFlight);
+        int maxFramesInFlight = std::clamp(SDL_min(prefs->vtMetalFramesInFlight, MAX_FRAMES_IN_FLIGHT), 2, 3);
+        m_MaxFramesInFlight.store(maxFramesInFlight);
+        m_PresentState = std::make_shared<PresentCallbackState>();
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Metal renderer using MaxFramesInFlight=%d", m_MaxFramesInFlight);
+                    "Metal renderer using MaxFramesInFlight=%d", maxFramesInFlight);
    }
 
     virtual ~VTMetalRenderer() override
     { @autoreleasepool {
+        m_PresentState->stopping.store(true);
+
+        {
+            // ensure all outstanding callbacks can complete
+            std::unique_lock<std::mutex> lock(m_PresentState->callbacksMutex);
+            m_PresentState->callbacksCv.wait(lock, [&] {
+                return m_PresentState->callbacksInFlight.load() == 0;
+            });
+        }
+
         // hide Metal HUD so it doesn't appear over the Qt UI
         showMetalHud(false);
 
@@ -161,9 +205,25 @@ public:
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             for (int j = 0; j < MAX_VIDEO_PLANES; j++) {
+                if (m_CVMetalTextures[i][j] != nullptr) {
+                    CFRelease(m_CVMetalTextures[i][j]);
+                    m_CVMetalTextures[i][j] = nullptr;
+                }
                 if (m_SwMappingTextures[i][j] != nullptr) {
                     [m_SwMappingTextures[i][j] release];
                 }
+            }
+        }
+
+        if (m_Drawable != nullptr) {
+            [m_Drawable release];
+            m_Drawable = nullptr;
+        }
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            if (m_CommandBuffer[i] != nullptr) {
+                [m_CommandBuffer[i] release];
+                m_CommandBuffer[i] = nullptr;
             }
         }
 
@@ -188,6 +248,22 @@ public:
         }
     }}
 
+#ifndef IMGUI_DISABLE
+    virtual void ImGui_initBackend() override
+    {
+        //ImGui_ImplOSX_Init((NSView *)m_MetalView);
+        ImGui_ImplMetal_Init(m_MetalLayer.device);
+        ImGui_ImplSDL2_InitForMetal(m_Window);
+    }
+
+    virtual void ImGui_deinitBackend() override
+    {
+        ImGui_ImplMetal_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        //ImGui_ImplOSX_Shutdown();
+    }
+#endif
+
     void showMetalHud(bool visible)
     {
         if (!m_MetalLayer) {
@@ -199,8 +275,8 @@ public:
                 m_MetalLayer.developerHUDProperties = @{
                     @"MTL_HUD_OPACITY": @0.8,
                     @"MTL_HUD_DISABLE_MENU_BAR": @0,
-                    @"MTL_HUD_ALIGNMENT": @"topright",
-                    @"MTL_HUD_ELEMENTS": @"device,rosetta,layersize,layerscale,memory,fps,frameinterval,frameintervalgraph,presentdelay,gputime,thermal,refreshrate,gamemode,client",
+                    @"MTL_HUD_ALIGNMENT": @"bottomright",
+                    @"MTL_HUD_ELEMENTS": @"device,rosetta,layersize,layerscale,memory,fps,frameinterval,frameintervalgraph,frameintervalhistogram,presentdelay,gputime,thermal,refreshrate,gamemode,client",
                     @"MTL_HUD_SHOW_METRICS_RANGE": @1,
                 };
             }
@@ -211,6 +287,14 @@ public:
                 };
             }
         }
+    }
+
+    virtual bool isRenderThreadSupported() override {
+        return true;
+    }
+
+    virtual bool isVsyncEnabled() override {
+        return m_IsVsync.load();
     }
 
     bool updateVideoRegionSizeForFrame(AVFrame* frame)
@@ -291,7 +375,8 @@ public:
 
             // This assumes plane 0 is exclusively the Y component
             SDL_assert(formatDesc->comp[0].step == 1 || formatDesc->comp[0].step == 2);
-            return pow(2, (formatDesc->comp[0].step * 8) - formatDesc->comp[0].depth);
+            int shift = (formatDesc->comp[0].step * 8) - formatDesc->comp[0].depth;
+            return 1 << shift;
         }
     }
 
@@ -342,8 +427,29 @@ public:
         paramBuffer.chromaOffset = simd_make_half2(chromaOffset[0],
                                                    chromaOffset[1]);
 
-        // Set the EDR metadata for HDR10 to enable OS tonemapping
-        if (frame->color_trc == AVCOL_TRC_SMPTE2084 && m_MasteringDisplayColorVolume != nullptr) {
+        if (m_UseEDR && frame->color_trc == AVCOL_TRC_SMPTE2084 && m_MasteringDisplayColorVolume != nullptr) {
+            // Set the EDR metadata for HDR10 to enable OS tonemapping
+            m_MetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+
+            // change to linear colorspace
+            CFStringRef name;
+            switch (colorspace) {
+                case COLORSPACE_REC_2020:
+                    name = kCGColorSpaceExtendedLinearITUR_2020;
+                    break;
+                case COLORSPACE_REC_601:
+                    name = kCGColorSpaceExtendedLinearSRGB;
+                    break;
+                case COLORSPACE_REC_709:
+                default:
+                    name = kCGColorSpaceExtendedLinearSRGB;
+                    break;
+            }
+
+            CGColorSpaceRelease(newColorSpace);
+            newColorSpace = CGColorSpaceCreateWithName(name);
+            m_MetalLayer.colorspace = newColorSpace;
+
             m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
                                                                        contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
                                                                 opticalOutputScale:203.0];
@@ -373,7 +479,14 @@ public:
         NSError* error = nil;
         MTLRenderPipelineDescriptor *pipelineDesc = [[MTLRenderPipelineDescriptor new] autorelease];
         pipelineDesc.vertexFunction = [[m_ShaderLibrary newFunctionWithName:@"vs_draw"] autorelease];
-        pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:planes == 2 ? @"ps_draw_biplanar" : @"ps_draw_triplanar"] autorelease];
+
+        if (m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float) {
+            // Linear shader with tonemapping
+            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:@"ps_draw_linear"] autorelease];
+        }
+        else {
+            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:planes == 2 ? @"ps_draw_biplanar" : @"ps_draw_triplanar"] autorelease];
+        }
         pipelineDesc.colorAttachments[0].pixelFormat = m_MetalLayer.pixelFormat;
         [m_VideoPipelineState release];
         m_VideoPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
@@ -475,7 +588,6 @@ public:
     // Caller frees frame after we return
     virtual void renderFrameIntoDrawable(AVFrame* frame, id<CAMetalDrawable> drawable)
     { @autoreleasepool {
-        std::array<CVMetalTextureRef, MAX_VIDEO_PLANES> cvMetalTextures;
         size_t planes = getFramePlaneCount(frame);
         SDL_assert(planes <= MAX_VIDEO_PLANES);
 
@@ -508,11 +620,16 @@ public:
                     return;
                 }
 
+                if (m_CVMetalTextures[m_CurrentBuffer][i] != nil) {
+                    // release previous texture
+                    CFRelease(m_CVMetalTextures[m_CurrentBuffer][i]);
+                }
+
                 CVReturn err = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, m_TextureCache, pixBuf, nullptr, fmt,
                                                                          CVPixelBufferGetWidthOfPlane(pixBuf, i),
                                                                          CVPixelBufferGetHeightOfPlane(pixBuf, i),
                                                                          i,
-                                                                         &cvMetalTextures[i]);
+                                                                         &m_CVMetalTextures[m_CurrentBuffer][i]);
                 if (err != kCVReturnSuccess) {
                     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                                  "CVMetalTextureCacheCreateTextureFromImage() failed: %d",
@@ -523,14 +640,14 @@ public:
         }
 
         m_RenderPassDescriptor.colorAttachments[0].texture = drawable.texture;
-        auto commandBuffer = [m_CommandQueue commandBuffer];
+        auto commandBuffer = getCommandBuffer();
         auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:m_RenderPassDescriptor];
 
         // Bind textures and buffers then draw the video region
         [renderEncoder setRenderPipelineState:m_VideoPipelineState];
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             for (size_t i = 0; i < planes; i++) {
-                [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(cvMetalTextures[i]) atIndex:i];
+                [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(m_CVMetalTextures[m_CurrentBuffer][i]) atIndex:i];
             }
         }
         else {
@@ -587,130 +704,350 @@ public:
             }
         }
 
+#ifndef IMGUI_DISABLE
+        StreamingPreferences *prefs = StreamingPreferences::get();
+        bool showDevUI = prefs->enableDeveloperUI;
+        bool showGamepadMenu = GamepadMenu::instance().IsVisible();
+        // zero ImGui overhead if you don't enable it
+        if (showDevUI || showGamepadMenu) {
+            ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
+            ImGui_ImplSDL2_NewFrame();
+            //ImGui_ImplOSX_NewFrame((NSView *)m_MetalView);
+            ImGui::NewFrame();
+
+            // Dockspace is cool but overkill
+            //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+
+            bool outputIsPQ = m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm;
+            DevUIColors.InitColors(outputIsPQ);
+            Stats::instance().RenderGraphs();
+
+            if (showDevUI) DevUISettings::instance().Render();
+            if (showGamepadMenu) GamepadMenu::instance().Render();
+
+            ImGui::EndFrame();
+            ImGui::Render();
+            ImDrawData* draw_data = ImGui::GetDrawData();
+            ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
+        }
+#endif
+
         [renderEncoder endEncoding];
         m_RenderPassDescriptor.colorAttachments[0].texture = nil;
-
-        [drawable addPresentedHandler:^(id<MTLDrawable> d) {
-            // The obvious way of measuring frametime, but see below. Note that presentedTime can be 0.0
-            // if the frame was missed for some reason.
-            CFTimeInterval lastPresented = (CFTimeInterval)m_LastPresented.load();
-            FQLog(@"[%f] dID %lu d.presentedTime %f, lastPresented %f, frametime %.3fms",
-                CACurrentMediaTime(), (unsigned long)d.drawableID, d.presentedTime, lastPresented, (d.presentedTime - lastPresented) * 1000.0);
-            if (lastPresented > 0.0 && d.presentedTime > 0.0) {
-                //CFTimeInterval frametime = d.presentedTime - lastPresented;
-            }
-            if (d.presentedTime > 0.0) {
-                m_LastPresented.store((double)d.presentedTime);
-            }
-        }];
-
-        __block dispatch_semaphore_t block_semaphore = m_FrameReady;
-        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
-            // this error indicates we've been moved to the background and should stop Metal activity
-            if (cb.status == MTLCommandBufferStatusError) {
-                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                            "Metal command buffer error: %lu",
-                            (unsigned long)cb.error);
-            }
-
-            // signal that the next frame can begin processing
-            dispatch_semaphore_signal(block_semaphore);
-
-            // Found this in a comment in MTLDrawable.h:
-            // "Be careful when you use delta between this presentedTime and previous frame's presentedTime
-            // to animate next frame. If the frame was presented using presentAfterMinimumDuration or presentAtTime,
-            // the presentedTime might includes delays to meet your specified present time. If you want to measure
-            // how much frame you can achieve, use GPUStartTime in the first command buffer of your frame rendering
-            // and GPUEndTime of your last frame rendering to calculate the frame interval."
-            CFTimeInterval lastGPUStartTime = (CFTimeInterval)m_LastGPUStartTime.load();
-            FQLog(@"[%f] dID %lu commandBuffer completed GPUEndTime %f, lastGPUStartTime %f",
-                    CACurrentMediaTime(), (unsigned long)drawable.drawableID, cb.GPUEndTime, lastGPUStartTime);
-            if (lastGPUStartTime > 0.0) {
-                //CFTimeInterval frametime = cb.GPUEndTime - lastGPUStartTime;
-            }
-            m_LastGPUStartTime.store((double)cb.GPUStartTime);
-
-            if (m_HwAccel) {
-                // Free textures after completion of rendering per CVMetalTextureCache requirements
-                for (size_t i = 0; i < planes; i++) {
-                    CFRelease(cvMetalTextures[i]);
-                }
-            }
-        }];
-
-        if (m_UsingVRR.load()) {
-            // VRR: Use the previous frame's duration, while staying within the VRR range
-            // Note that the Vsync checkbox is ignored when VRR is detected.
-            CFTimeInterval duration = m_MinRefreshInterval;
-            if (m_lastPts > 0) {
-                int64_t deltaPts = frame->pts - m_lastPts;
-                if (deltaPts > 0) {
-                    double delta = static_cast<double>(deltaPts) / 90000.0;
-                    duration = std::clamp(delta, m_MinRefreshInterval, m_MaxRefreshInterval);
-
-                    FQLog(@"[VRR] pts %lld, deltaMs %.3f, max/min %.3f/%.3f, present afterMinimumDuration:%.3f ms",
-                        frame->pts, delta * 1000.0, m_MaxRefreshInterval * 1000.0, m_MinRefreshInterval * 1000.0, duration * 1000.0);
-                }
-            }
-            m_lastPts = frame->pts;
-            FQLog(@"[%f] dID %lu VRR presentDrawable afterMinimumDuration:%f pts %.3fms",
-                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0, frame->pts / 90.0);
-            [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
-        }
-        else if (m_MetalLayer.displaySyncEnabled) {
-            // Vsync enabled, lock to the refresh rate. A server that supports
-            // clientRefreshRateX100 is needed if the refresh rate is fractional.
-            CFTimeInterval duration = m_MinRefreshInterval;
-
-            FQLog(@"[%f] dID %lu vsync presentDrawable afterMinimumDuration:%f",
-                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0);
-
-            // Don't delay the first frame
-            if (drawable.drawableID == 0) {
-                [commandBuffer presentDrawable:drawable];
-            }
-            else {
-                [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
-            }
-        }
-        else {
-            // Vsync disabled could look like this but this is a stuttery mess
-            //[commandBuffer presentDrawable:drawable];
-
-            // Can we still use afterMinimumDuration without setting displaySyncEnabled?
-            CFTimeInterval duration = m_MinRefreshInterval;
-            FQLog(@"[%f] dID %lu no-vsync presentDrawable afterMinimumDuration:%f",
-                CACurrentMediaTime(), (unsigned long)drawable.drawableID, duration * 1000.0);
-
-            // Don't delay the first frame
-            if (drawable.drawableID == 0) {
-                [commandBuffer presentDrawable:drawable];
-            }
-            else {
-                [commandBuffer presentDrawable:drawable afterMinimumDuration:duration];
-            }
-        }
-        [commandBuffer commit];
     }}
 
-    virtual void waitToRender() override
-    {
-        // Wait for a previous drawable to be presented and ready for reuse
-        dispatch_semaphore_wait(m_FrameReady, DISPATCH_TIME_FOREVER);
-    }
+    virtual void presentFrame(AVFrame* frame, uint64_t targetQpc) override
+    { @autoreleasepool {
+        auto commandBuffer = getCommandBuffer();
+        auto drawable = nextDrawable();
+
+        // We need to get the previous frame's pts that was attached by FrameCadence, in case that frame was dropped
+        int64_t prevPts = 0;
+        if (frame->opaque_ref) {
+            auto *data = reinterpret_cast<MLFrameData *>(frame->opaque_ref->data);
+            prevPts = data->prevPts;
+        }
+
+        // Warning: These callbacks must not use any member variables besides m_PresentState (using state->)
+        auto state = m_PresentState;
+        // outstanding handlers: addPresentedHandler, addScheduledHandler, addCompletedHandler
+        state->callbacksInFlight.fetch_add(3);
+
+        __block bool isNewFrame = prevPts > 0 && frame->pts != prevPts;
+        [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+            auto onExit = [state]() {
+                // this makes sure the destructor waits for us before exiting
+                if (state->callbacksInFlight.fetch_sub(1) > 0) {
+                    std::lock_guard<std::mutex> lock(state->callbacksMutex);
+                    state->callbacksCv.notify_all();
+                }
+            };
+            if (state->stopping.load()) {
+                onExit();
+                return;
+            }
+
+            // values we'll pass to DevUI
+            double presentDelayMs = 0.0;
+            double presentIntervalMs = 0.0;
+
+            // Graph frametime. Note that d.presentedTime can be 0.0 if the frame was missed for some reason.
+            CFTimeInterval lastPresented = (CFTimeInterval)state->lastPresented.load();
+            FQLog("[%f] dID %lu d.presentedTime %f, lastPresented %f, frametime %.3fms",
+                CACurrentMediaTime(), (unsigned long)d.drawableID, d.presentedTime, lastPresented, (d.presentedTime - lastPresented) * 1000.0);
+
+            // frametime, not counting duplicates in DL mode
+            if (isNewFrame) {
+                if (lastPresented > 0.0 && d.presentedTime > 0.0) {
+                    presentIntervalMs = (d.presentedTime - lastPresented) * 1000.0;
+                    ImGuiPlots::instance().observeFloat(PLOT_FRAMETIME, static_cast<float>(presentIntervalMs));
+                }
+                state->lastPresented.store((double)d.presentedTime);
+            }
+
+            // present-to-display latency
+            {
+                std::lock_guard<std::mutex> lock(state->pendingFramesMutex);
+                for (auto it = state->pendingFrames.begin(); it != state->pendingFrames.end(); ++it) {
+                    if (it->drawableId == d.drawableID) {
+                        const double submittedPresentTime = it->submittedPresentTime;
+                        int presentMode = it->presentMode;
+
+                        if (d.presentedTime > 0.0) {
+                            double presentDelay = d.presentedTime - submittedPresentTime;
+                            Stats::instance().SubmitPresentTimeUs(
+                                static_cast<uint64_t>(presentDelay * 1000000), presentMode);
+                            presentDelayMs = presentDelay * 1000.0;
+                            ImGuiPlots::instance().observeFloat(PLOT_PRESENT_DELAY, static_cast<float>(presentDelayMs));
+                        }
+
+                        state->pendingFrames.erase(it);
+                        break;
+                    }
+                }
+            }
+
+        #ifndef IMGUI_DISABLE
+            DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
+                if (presentDelayMs > 0.0) {
+                    metrics.presentDelayMs.add(presentDelayMs);
+                    metrics.presentIntervalMs.add(presentIntervalMs);
+                }
+            });
+        #endif
+
+            onExit();
+        }];
+
+        auto recordPresentedFrame = [state](const PresentedFrameInfo& pfi) {
+            std::lock_guard<std::mutex> lock(state->pendingFramesMutex);
+            state->pendingFrames.push_back(pfi);
+
+        #ifndef IMGUI_DISABLE
+            // pass this info for display in the dev UI
+            // More stats are set when the frame is presented in addPresentedHandler
+            DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
+                metrics.presentMode = pfi.presentMode;
+                metrics.presentAtTime = pfi.atTime;
+                metrics.presentAfterMinimumDuration = pfi.afterMinimumDuration;
+                if (pfi.submittedPresentTime > pfi.vsyncDeadline) {
+                    // we missed the current deadline
+                    metrics.presentLateMs.add((pfi.submittedPresentTime - pfi.vsyncDeadline) * 1000.0);
+                }
+                if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED && pfi.late) {
+                    // alternate check for lateness
+                    metrics.displayLockedMissed++;
+                }
+            });
+        #endif
+        };
+
+        // track how well we're running within the frame
+        CFTimeInterval vsyncTimestamp = m_VsyncTimestamp.load();
+        CFTimeInterval vsyncDeadline = m_VsyncDeadline.load();
+
+        auto pfi = PresentedFrameInfo{
+            .drawableId     = m_CurrentDrawableID,
+            .pacingMode     = FramePacer::instance().GetPacingMode(),
+            .atTime         = 0.0,
+            .vsyncTimestamp = vsyncTimestamp,
+            .vsyncDeadline  = vsyncDeadline
+        };
+
+        // prefer the user's choice from DevUI, or use auto-detection
+        pfi.presentMode = m_RequestedPresentMode;
+        if (pfi.presentMode == StreamingPreferences::PRESENT_AUTO) {
+            if (m_UsingVRR.load()) {
+                // display supports VRR
+                pfi.presentMode = StreamingPreferences::PRESENT_VRR;
+            }
+            else if (m_IsVsync.load()) {
+                // vsync enabled
+                pfi.presentMode = StreamingPreferences::PRESENT_FIXED;
+            }
+            else {
+                // vsync disabled
+                pfi.presentMode = StreamingPreferences::PRESENT_NO_VSYNC;
+            }
+        }
+
+        if (pfi.presentMode == StreamingPreferences::PRESENT_VRR) {
+            // In VRR mode we schedule based on how long the previous
+            // frame should be displayed. The default uses a low value
+            // that covers the average GPU time per frame.
+            CFTimeInterval duration = 0.0;
+            double avgGPUTime = state->averageGPUTime.load();
+
+            // Optionally we can use the host's timestamps to schedule
+            // each frame for as long as it was originally displayed. I am
+            // not sure this has any actual benefit over using GPU time,
+            // but it deserves more testing.
+            if (m_UsePTSForVRR) {
+                if (prevPts > 0) {
+                    int64_t deltaPts = frame->pts - prevPts;
+                    if (deltaPts > 0) {
+                        double delta = static_cast<double>(deltaPts) / 90000.0;
+                        duration = std::clamp(delta, avgGPUTime, m_MaxRefreshInterval);
+
+                        FQLog("[%f] VRR mode pts %.3fs, prevPts %.3fs, delta %.3fs, bounds %.3f/%.3f, present afterMinimumDuration:%.3f ms",
+                            CACurrentMediaTime(), frame->pts / 90000.0, prevPts / 90000.0, delta, avgGPUTime * 1000.0, m_MaxRefreshInterval * 1000.0, duration * 1000.0);
+                    }
+                }
+            }
+            else {
+                // Apple recommends using a min duration using the average GPU time when rendering for VRR.
+                duration = std::clamp(avgGPUTime, 0.0, m_MaxRefreshInterval);
+
+                FQLog("[%f] VRR mode %.3fs, bounds %.3f/%.3f, present afterMinimumDuration:%.3f ms",
+                    CACurrentMediaTime(), frame->pts / 90000.0, avgGPUTime * 1000.0, m_MaxRefreshInterval * 1000.0, duration * 1000.0);
+            }
+
+            pfi.afterMinimumDuration = duration;
+        }
+        else if (pfi.presentMode == StreamingPreferences::PRESENT_FIXED) {
+            // Vsync enabled, schedule frames at vsync timestamps. A server that supports
+            // clientRefreshRateX100 is needed if the refresh rate is fractional.
+
+            // Target the frame to the end of the next vsync period. This can be achieved if
+            // the display is fullscreen and running in Direct mode. In windowed mode or other compositing
+            // situations where macOS is in triple-buffering mode, it will be displayed at the end of frame +2
+            // |  now   |  +1  |  +2  |
+            //          ^      ^      ^
+            //         /       |      |
+            // deadline  targetTime   worst case composited display time
+            CFTimeInterval interval = vsyncDeadline - vsyncTimestamp;
+            CFTimeInterval targetTime = vsyncDeadline + interval; // end of frame +1
+
+            // If we're in Display-locked mode, make sure we're rendering every frame
+            if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
+                pfi.late = false;
+
+                if (targetQpc) {
+                    targetTime = QpcToMs(targetQpc) / 1000.0;
+                }
+
+                // If our timestamp is more than 1 frame away from the previous, switch to aMD
+                static CFTimeInterval lastAtTime = 0.0;
+                if (lastAtTime > 0.0) {
+                    // Because our vsync timing comes from another thread, we can sometimes see the same vsyncDeadline
+                    // for 2 frames in a row. Correct for this.
+                    if (targetTime == lastAtTime) {
+                        targetTime += interval;
+                    }
+
+                    if (targetTime - lastAtTime > interval * 1.001) {
+                        pfi.late = true;
+                    }
+                }
+                lastAtTime = targetTime;
+            }
+            pfi.atTime = targetTime;
+        }
+
+        pfi.submittedPresentTime = CACurrentMediaTime();
+
+        // (From Retroarch)
+        // Use addScheduledHandler to present, following Apple's recommendation.
+        // According to Apple (and used by MoltenVK), it is more performant to call
+        // [drawable present] from within a scheduled-handler than to use
+        // [commandBuffer presentDrawable:]. This provides better frame pacing
+        // because presentation is queued when the command buffer is scheduled
+        // (added to GPU queue), not when it completes.
+        [commandBuffer addScheduledHandler:^(id<MTLCommandBuffer>) {
+            auto onExit = [state]() {
+                // this makes sure the destructor waits for us before exiting
+                if (state->callbacksInFlight.fetch_sub(1) > 0) {
+                    std::lock_guard<std::mutex> lock(state->callbacksMutex);
+                    state->callbacksCv.notify_all();
+                }
+            };
+            if (state->stopping.load()) {
+                onExit();
+                return;
+            }
+
+            switch (pfi.presentMode) {
+                case StreamingPreferences::PRESENT_VRR:
+                    [drawable presentAfterMinimumDuration:pfi.afterMinimumDuration];
+                    break;
+
+                case StreamingPreferences::PRESENT_NO_VSYNC:
+                    [drawable present];
+                    break;
+
+                default:
+                case StreamingPreferences::PRESENT_FIXED:
+                    if (pfi.afterMinimumDuration > 0.0) {
+                        [drawable presentAfterMinimumDuration:pfi.afterMinimumDuration];
+                    }
+                    else if (pfi.atTime > 0.0) {
+                        [drawable presentAtTime:pfi.atTime];
+                    }
+                    else {
+                        [drawable present];
+                    }
+                    break;
+            }
+
+            recordPresentedFrame(pfi);
+            onExit();
+        }];
+
+        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            auto onExit = [state]() {
+                // this makes sure the destructor waits for us before exiting
+                if (state->callbacksInFlight.fetch_sub(1) > 0) {
+                    std::lock_guard<std::mutex> lock(state->callbacksMutex);
+                    state->callbacksCv.notify_all();
+                }
+            };
+            if (state->stopping.load()) {
+                onExit();
+                return;
+            }
+
+            // track GPU time
+            const CFTimeInterval GPUTime = cb.GPUEndTime - cb.GPUStartTime;
+            const double alpha = 0.25f;
+            double avgGPUTime = (GPUTime * alpha) + (state->averageGPUTime.load() * (1.0 - alpha));
+            state->averageGPUTime.store(avgGPUTime);
+
+            onExit();
+        }];
+
+        [commandBuffer commit];
+        [m_CommandBuffer[m_CurrentBuffer] release];
+        m_CommandBuffer[m_CurrentBuffer] = nil;
+
+        // release the drawable and obtain the next one
+        // We expect this to block, this works better for
+        // frame pacing than a semaphore according to RetroArch
+        if (m_Drawable) {
+            [m_Drawable release];
+            m_Drawable = nil;
+        }
+
+        // we have some time here to flush the cache, this should keep our memory usage low
+        CVMetalTextureCacheFlush(m_TextureCache, 0);
+
+        nextDrawable();
+    }}
 
     // Caller frees frame after we return
     virtual void renderFrame(AVFrame* frame) override
     { @autoreleasepool {
-        DSGuard frameGuard(m_FrameReady);
-
         if (m_IsPaused.load()) {
             // we're paused due to being hidden or off screen,
-            // we can just throw away the frame and bump the semaphore (via the guard).
+            // we can just release the drawable and throw away the frame.
+            if (m_Drawable) {
+                [m_Drawable release];
+                m_Drawable = nil;
+            }
+
             return;
         }
 
-        m_CurrentBuffer = (m_CurrentBuffer + 1) % m_MaxFramesInFlight;
+        m_CurrentBuffer = (m_CurrentBuffer + 1) % m_MaxFramesInFlight.load();
 
         // Handle changes to the frame's colorspace from last time we rendered
         if (!updateColorSpaceForFrame(frame)) {
@@ -731,12 +1068,11 @@ public:
         }
 
         // Render to the next drawable
-        id<CAMetalDrawable> drawable = [m_MetalLayer nextDrawable];
+        id<CAMetalDrawable> drawable = nextDrawable();
         if (drawable == nullptr) {
             return;
         }
 
-        frameGuard.disarm();
         renderFrameIntoDrawable(frame, drawable);
     }}
 
@@ -863,7 +1199,7 @@ public:
 
             // Choose a device
             m_MetalLayer.device = device;
-            m_MetalLayer.maximumDrawableCount = m_MaxFramesInFlight;
+            m_MetalLayer.maximumDrawableCount = std::clamp(m_MaxFramesInFlight.load(), 2, 3);
             m_MetalLayer.allowsNextDrawableTimeout = YES;
 
             // Allow EDR content if we're streaming in a 10-bit format
@@ -875,10 +1211,12 @@ public:
             // I would completely remove the ability to run this renderer without vsync
             // but someone may want it for something.
             m_MetalLayer.displaySyncEnabled = YES;
+            m_IsVsync.store(true);
             if (m_IsFullScreen) {
                 if (!params->enableVsync) {
                     // Allow v-sync disabled only in fullscreen
                     m_MetalLayer.displaySyncEnabled = NO;
+                    m_IsVsync.store(false);
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "V-sync disabled per request in fullscreen");
                 }
@@ -905,18 +1243,81 @@ public:
         auto oldTexture = m_OverlayTextures[type];
         m_OverlayTextures[type] = nullptr;
         SDL_AtomicUnlock(&m_OverlayLock);
-
         [oldTexture release];
+
+    #ifndef IMGUI_DISABLE
+        // we may need to apply changes from DevUI, this function is the best place since it's only called once a second
+        auto cfg = DevUISettings::instance().GetConfig();
+        if (m_MaxFramesInFlight.load() != cfg.maxFramesInFlight) {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of maxFramesInFlight to %d", cfg.maxFramesInFlight);
+                m_MaxFramesInFlight.store(cfg.maxFramesInFlight);
+                m_MetalLayer.maximumDrawableCount = std::clamp(cfg.maxFramesInFlight, 2, 3);
+            });
+        }
+
+        if (m_ProMotionAllowsVRR != cfg.proMotionAllowsVRR) {
+            m_ProMotionAllowsVRR = cfg.proMotionAllowsVRR;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of proMotionAllowsVRR to %d", m_ProMotionAllowsVRR);
+            refreshWindowMetadata();
+        }
+
+        if (m_UsePTSForVRR != cfg.usePTSForVRR) {
+            m_UsePTSForVRR = cfg.usePTSForVRR;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of usePTSForVRR to %d", m_UsePTSForVRR);
+        }
+
+        if (m_RequestedPresentMode != cfg.presentMode) {
+            m_RequestedPresentMode = cfg.presentMode;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of presentMode to %d", m_RequestedPresentMode);
+
+            // change vsync if necessary
+            bool vsyncEnabled = YES;
+            if (m_RequestedPresentMode == StreamingPreferences::PRESENT_NO_VSYNC) {
+                vsyncEnabled = NO;
+            }
+            if (m_MetalLayer.displaySyncEnabled != vsyncEnabled) {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of vsync to %d", vsyncEnabled);
+                    m_MetalLayer.displaySyncEnabled = vsyncEnabled;
+                    m_IsVsync.store(vsyncEnabled);
+                });
+            }
+        }
+
+        if (m_UseEDR != cfg.useEDR) {
+            m_UseEDR = cfg.useEDR;
+            m_HdrMetadataChanged = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of useEDR to %d", m_UseEDR);
+        }
+
+        if (const char* env_capture = std::getenv("MTL_CAPTURE_ENABLED");
+            env_capture && std::strcmp(env_capture, "1") == 0)
+        {
+            static bool captureGPUTrace = cfg.captureGPUTrace;
+            if (captureGPUTrace != cfg.captureGPUTrace) {
+                captureGPUTrace = cfg.captureGPUTrace;
+                if (!m_IsGPUCapturing) {
+                    startGPUCapture();
+                }
+                else {
+                    stopGPUCapture();
+                }
+            }
+        }
+
+        if (m_ShowMetalHUD != cfg.showMetalHud) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of showMetalHud to %d", cfg.showMetalHud);
+            m_ShowMetalHUD = cfg.showMetalHud;
+
+            showMetalHud(m_ShowMetalHUD);
+        }
+    #endif
 
         // If the overlay is disabled, we're done
         if (!overlayEnabled) {
-            showMetalHud(false);
             SDL_FreeSurface(newSurface);
             return;
-        }
-
-        if (StreamingPreferences::get()->showMetalPerformanceHud) {
-            showMetalHud(true);
         }
 
         // Create a texture to hold our pixel data
@@ -946,6 +1347,12 @@ public:
         SDL_AtomicUnlock(&m_OverlayLock);
     }}
 
+    virtual void notifyVsyncTimestamps(double timestamp, double deadline) override
+    {
+        m_VsyncTimestamp.store(timestamp);
+        m_VsyncDeadline.store(deadline);
+    }
+
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary**) override
     {
         if (m_HwAccel) {
@@ -973,8 +1380,7 @@ public:
 
     int getRendererAttributes() override
     {
-        // Require frame pacing until we switch to our own pacer
-        return RENDERER_ATTRIBUTE_HDR_SUPPORT | RENDERER_ATTRIBUTE_FORCE_PACING;
+        return RENDERER_ATTRIBUTE_HDR_SUPPORT;
     }
 
     bool isPixelFormatSupported(int videoFormat, AVPixelFormat pixelFormat) override
@@ -1023,6 +1429,8 @@ public:
 
             // SDL's display change detection will call notifyWindowChanged() but there are some Apple-specific
             // notifications we need to watch out for, such as moving off screen or into the background.
+            // We still have to decode everything anyway, but DisplayLink changes framerates when the window is not
+            // visible, and it's better to pause in that situation.
             if (m_Observer != nil) {
                 [m_Observer stop];
                 m_Observer = nil;
@@ -1035,15 +1443,24 @@ public:
             bool isVRR = m_MinRefreshInterval != m_MaxRefreshInterval;
             m_IsFullScreen = ((nswindow.styleMask & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen);
             bool isProMotion = screen.displayUpdateGranularity > 0.0;
-
             if (isProMotion) {
-                // ProMotion displays like MacBook Pro are detected as VRR but behave
-                // badly since they can only operate at 120hz, 60hz, and a few lower rates.
-                // This should also handle the low power use case where it will run at 60hz.
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "ProMotion display detected, treating as a fixed %.2f Hz display",
-                            1.0f / m_MinRefreshInterval);
-                isVRR = false;
+                if (m_ProMotionAllowsVRR) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "ProMotion display detected, but allowing VRR from %.0f-%.0f Hz",
+                                1.0f / m_MaxRefreshInterval, 1.0f / m_MinRefreshInterval);
+                    isVRR = true;
+                }
+                else {
+                    // ProMotion displays like MacBook Pro are detected as VRR but behave
+                    // badly since they can only operate at 120hz, 60hz, and a few lower rates.
+                    // This should also handle the low power use case where it will run at 60hz.
+                    if (m_IsFullScreen) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "ProMotion display detected (displayUpdateGranularity %.3fms), treating as a fixed %.2f Hz display",
+                                    screen.displayUpdateGranularity * 1000.0, 1.0f / m_MinRefreshInterval);
+                        isVRR = false;
+                    }
+                }
             }
 
             m_UsingVRR.store(false);
@@ -1067,6 +1484,22 @@ public:
                     "Output display: %s @ %.2f Hz fixed",
                     [screen.localizedName UTF8String], 1.0f / m_MinRefreshInterval);
             }
+
+            // EDR
+            m_MaxPotentialEDR = screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
+            m_CurrentEDR      = screen.maximumExtendedDynamicRangeColorComponentValue;
+            m_MaxReferenceEDR = screen.maximumReferenceExtendedDynamicRangeColorComponentValue;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "EDR: current %.2f / max %.2f / reference %.2f",
+                        m_CurrentEDR, m_MaxPotentialEDR, m_MaxReferenceEDR);
+
+        #ifndef IMGUI_DISABLE
+            DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
+                config.isVRR = isVRR;
+                config.isFullscreen = m_IsFullScreen;
+                config.isProMotion = isProMotion;
+            });
+        #endif
         }
     }
 
@@ -1113,14 +1546,78 @@ public:
         }
     }
 
+    void startGPUCapture()
+    {
+        if (m_IsGPUCapturing) return;
+
+        MTLCaptureManager *captureMgr = [MTLCaptureManager sharedCaptureManager];
+
+        // capture all work from our command queue, but ignore ImGui
+        MTLCaptureDescriptor *captureDesc = [[MTLCaptureDescriptor new] autorelease];
+		captureDesc.captureObject = m_CommandQueue;
+
+        const char* filePath = "/tmp/moonlight.gputrace";
+		if (strlen(filePath)) {
+			if ([captureMgr respondsToSelector: @selector(supportsDestination:)] &&
+				[captureMgr supportsDestination: MTLCaptureDestinationGPUTraceDocument] ) {
+
+				NSString* expandedFilePath = [[NSString stringWithUTF8String: filePath] stringByExpandingTildeInPath];
+				SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Capturing GPU trace to file %s.", expandedFilePath.UTF8String);
+
+				captureDesc.destination = MTLCaptureDestinationGPUTraceDocument;
+				captureDesc.outputURL = [NSURL fileURLWithPath: expandedFilePath];
+
+                NSError* error = nil;
+                if (![captureMgr startCaptureWithDescriptor:captureDesc error:&error]) {
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                 "Failed to start GPU capture: %s", error.localizedDescription.UTF8String);
+                    return;
+                }
+
+                m_IsGPUCapturing = true;
+			}
+        }
+    }
+
+    void stopGPUCapture()
+    {
+        if (m_IsGPUCapturing) {
+		    [[MTLCaptureManager sharedCaptureManager] stopCapture];
+		    m_IsGPUCapturing = false;
+        }
+	}
+
+    id<CAMetalDrawable> nextDrawable()
+    {
+        if (m_Drawable == nil) {
+            id<CAMetalDrawable> drawable = [m_MetalLayer nextDrawable];
+            if (!drawable) {
+                return nil;
+            }
+
+            m_Drawable = [drawable retain];
+            m_CurrentDrawableID = m_Drawable.drawableID;
+        }
+
+        return m_Drawable;
+    }
+
+    id<MTLCommandBuffer> getCommandBuffer()
+    {
+        if (!m_CommandBuffer[m_CurrentBuffer]) {
+            m_CommandBuffer[m_CurrentBuffer] = [[m_CommandQueue commandBuffer] retain];
+            m_CommandBuffer[m_CurrentBuffer].label = @"vt_metal command buffer";
+        }
+        return m_CommandBuffer[m_CurrentBuffer];
+    }
 
 private:
     bool m_HwAccel;
     SDL_Window* m_Window;
     AVBufferRef* m_HwContext;
     CAMetalLayer* m_MetalLayer;
-    dispatch_semaphore_t m_FrameReady;
     CVMetalTextureCacheRef m_TextureCache;
+    CVMetalTextureRef m_CVMetalTextures[MAX_FRAMES_IN_FLIGHT][MAX_VIDEO_PLANES];
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
@@ -1130,6 +1627,7 @@ private:
     id<MTLRenderPipelineState> m_OverlayPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
     id<MTLCommandQueue> m_CommandQueue;
+    id<MTLCommandBuffer> m_CommandBuffer[MAX_FRAMES_IN_FLIGHT];
     uint32_t m_CurrentBuffer;
     id<MTLTexture> m_SwMappingTextures[MAX_FRAMES_IN_FLIGHT][MAX_VIDEO_PLANES];
     SDL_MetalView m_MetalView;
@@ -1138,16 +1636,28 @@ private:
     int m_LastDrawableWidth;
     int m_LastDrawableHeight;
 
-    int m_MaxFramesInFlight;
-    int64_t m_lastPts;
+    std::shared_ptr<PresentCallbackState> m_PresentState;
+    std::atomic<int> m_MaxFramesInFlight;
     bool m_IsFullScreen;
+    bool m_ProMotionAllowsVRR;
+    bool m_UsePTSForVRR;
+    bool m_UseEDR;
+    bool m_ShowMetalHUD;
+    CGFloat m_MaxPotentialEDR;
+    CGFloat m_CurrentEDR;
+    CGFloat m_MaxReferenceEDR;
+    int m_RequestedPresentMode;
     CFTimeInterval m_MinRefreshInterval;
     CFTimeInterval m_MaxRefreshInterval;
-    std::atomic<double> m_LastPresented;
-    std::atomic<double> m_LastGPUStartTime;
     std::atomic<bool> m_UsingVRR;
     std::atomic<bool> m_IsPaused;
+    std::atomic<bool> m_IsVsync;
+    std::atomic<double> m_VsyncTimestamp;
+    std::atomic<double> m_VsyncDeadline;
     VTMetalObserver* m_Observer;
+    bool m_IsGPUCapturing;
+    id<CAMetalDrawable> m_Drawable;
+    unsigned long m_CurrentDrawableID;
 };
 
 IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
@@ -1183,7 +1693,10 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
 }
 
 - (void)stop {
-    if (_note) [[NSNotificationCenter defaultCenter] removeObserver:_note];
+    if (_note) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_note];
+        _note = nil;
+    }
 }
 
 @end
