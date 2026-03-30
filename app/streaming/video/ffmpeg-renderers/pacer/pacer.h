@@ -13,18 +13,10 @@
 // - 1 frame for deferred free
 #define PACER_MAX_OUTSTANDING_FRAMES (3 + 1 + 1)
 
-class Pacer;
-typedef void (*VsyncCallback)(double vsyncTimestamp, double targetTimestamp, void* ctx);
-struct VsyncCallbackData {
-    VsyncCallback callback;
-    void* ctx;
-};
-
 class IVsyncSource {
 public:
     virtual ~IVsyncSource() {}
     virtual bool initialize(SDL_Window* window, int displayFps) = 0;
-    virtual void setPacer(Pacer* pacer) = 0;
 
     // Asynchronous sources produce callbacks on their own, while synchronous
     // sources require calls to waitForVsync().
@@ -32,11 +24,6 @@ public:
 
     // Optional method called before destruction
     virtual void stop() = 0;
-
-    // Register a callback to receive for every vsync. Receives 2 doubles,
-    // the timestamp of the current vsync interval, and the timestamp of the
-    // next interval. The next frame must be presented before the second timestamp.
-    virtual void setExtraCallback(VsyncCallback cb, void *ctx) = 0;
 
     // Call this method after receiving m_VsyncSignalled or after
     // waitForVsync() returns to obtain the remaining time in the current
@@ -49,20 +36,20 @@ public:
     }
 };
 
-class Pacer
+class Pacer : public IFramePacer
 {
 public:
     Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats);
 
-    ~Pacer();
+    virtual ~Pacer();
 
-    void submitFrame(AVFrame* frame);
+    virtual void submitFrame(AVFrame* frame) override;
 
-    bool initialize(PDECODER_PARAMETERS params);
+    virtual bool initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS params) override;
 
-    void signalVsync();
+    virtual void signalVsync() override;
 
-    void renderOnMainThread();
+    virtual bool renderOnMainThread() override;
 
 private:
     static int vsyncThread(void* context);
@@ -91,7 +78,7 @@ private:
     bool m_Stopping;
 
     IVsyncSource* m_VsyncSource;
-    IFFmpegRenderer* m_VsyncRenderer;
+    IFFmpegRenderer* m_Renderer;
     int m_MaxVideoFps;
     int m_DisplayFps;
     PVIDEO_STATS m_VideoStats;

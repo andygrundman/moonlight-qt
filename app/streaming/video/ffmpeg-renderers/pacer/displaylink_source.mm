@@ -2,7 +2,6 @@
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "displaylink_source.h"
-#include "pacer.h"
 #undef AVMediaType
 
 #include <SDL_syswm.h>
@@ -24,14 +23,8 @@
 
 @end
 
-// DisplayLinkSource& DisplayLinkSource::instance() {
-// 	static DisplayLinkSource inst;
-// 	return inst;
-// }
-
-DisplayLinkSource::DisplayLinkSource(Pacer* pacer)
-    : m_Pacer(pacer),
-      m_DisplayLinkTarget(nullptr),
+DisplayLinkSource::DisplayLinkSource()
+    : m_DisplayLinkTarget(nullptr),
       m_TargetTimestamp(0.0)
 {
 }
@@ -74,28 +67,11 @@ bool DisplayLinkSource::initialize(SDL_Window* window, int fps)
     m_DisplayLinkTarget = target;
     m_TargetTimestamp.store(0.0);
 
-    {
-        std::lock_guard<std::mutex> lock(m_mtx);
-        m_Callback.callback = nullptr;
-        m_Callback.ctx = nullptr;
-    }
-
     return true;
-}
-
-void DisplayLinkSource::setPacer(Pacer* pacer) {
-    std::lock_guard<std::mutex> lock(m_mtx);
-    m_Pacer = pacer;
 }
 
 void DisplayLinkSource::stop()
 {
-    {
-        std::lock_guard<std::mutex> lock(m_mtx);
-        m_Callback.callback = nullptr;
-        m_Callback.ctx = nullptr;
-    }
-
     m_TargetTimestamp.store(0.0);
 
     DisplayLinkTarget* target = (DisplayLinkTarget*)m_DisplayLinkTarget;
@@ -111,25 +87,13 @@ bool DisplayLinkSource::isAsync()
     return true;
 }
 
-void DisplayLinkSource::setExtraCallback(VsyncCallback cb, void *ctx)
-{
-    std::lock_guard<std::mutex> lock(m_mtx);
-    m_Callback.callback = cb;
-    m_Callback.ctx = ctx;
-}
-
 void DisplayLinkSource::displayLinkUpdate(double timestamp, double targetTimestamp)
 {
     std::lock_guard<std::mutex> lock(m_mtx);
     m_TargetTimestamp.store(targetTimestamp);
 
-    if (m_Pacer) {
-        m_Pacer->signalVsync();
-    }
-
-    if (m_Callback.callback) {
-        m_Callback.callback(timestamp, targetTimestamp, m_Callback.ctx);
-    }
+    FramePacer::instance().signalVsync();
+    FramePacer::instance().signalVsyncTS(timestamp, targetTimestamp);
 }
 
 double DisplayLinkSource::remainingMilliseconds()

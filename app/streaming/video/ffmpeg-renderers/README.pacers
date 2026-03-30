@@ -1,0 +1,60 @@
+pacer/
+    displaylink_source
+    dxvsyncsource
+    pacer
+    waylandvsyncsource
+
+pacer.cpp
+=========
+The classic Moonlight 1 or 2-level pacer. This diagram flows from bottom to top.
+
+render loop --------------------
+  Pacer runs the render loop:
+    waitToRender() - renderer-specific semaphore signals when ready for new frame
+    wait for frame if RenderQueue is empty
+    renderFrame()
+      render next frame in RenderQueue
+      If any other frame has queued here, drop it. (*)
+        Unless renderer is defined as NO_BUFFERING.
+
+m_RenderQueue ---------------
+
+m_PacingQueue ----------------
+  Optional, if VsyncSource is available (D3D, macOS DisplayLink, and Wayland):
+    Wake up on vsync.
+    If more than 1 frame has queued here, drop all but the newest. (*)
+    Move 1 frame to RenderQueue.
+  If no VsyncSource:
+    Bypass this phase, submit directly to RenderQueue.
+
+submitFrame() ----------------
+
+(*) frame drop target is more lenient if the pace has been steady over the last 500ms.
+
+framepacing.cpp
+===============
+This is an alternate frame pacing implemention ported from the Xbox Moonlight UWP client. It features
+a simpler single-level frame queue where frames are dropped in alternating order. The frame queue is not
+tied to vsync. Xbox operates on very strict present timing, this will need to be adapted for various backends.
+Several frame pacers pull frames from the queue:
+
+1. Immediate
+    Dequeue a new frame if available and immediately render it. When no new frame is available
+    it relies on the system to continue showing the previous frame.
+
+2. Display-locked
+    Attempts to pace rendering based on observed framerate from host pts data. Always presents at max
+    refresh rate, taking control over whether to render a new frame or a cached previous frame. This provides
+    quite good results when dealing with lower framerate content, and can even perform a form of 3:2 pulldown
+    for cases such as 24fps-in-60fps content.
+
+3. VRR?
+    Xbox doesn't support VRR so this mode is TBD.
+
+framepacing/
+    framequeue
+    framepacer
+      DisplayLocked
+      DisplayLockedVRR
+      Immediate
+

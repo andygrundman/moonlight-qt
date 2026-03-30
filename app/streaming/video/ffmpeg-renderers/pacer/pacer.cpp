@@ -1,4 +1,4 @@
-#include "pacer.h"
+#include "framepacing/framepacer.h"
 #include "streaming/streamutils.h"
 
 #ifdef Q_OS_WIN32
@@ -39,7 +39,7 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
     m_DeferredFreeFrame(nullptr),
     m_Stopping(false),
     m_VsyncSource(nullptr),
-    m_VsyncRenderer(renderer),
+    m_Renderer(renderer),
     m_MaxVideoFps(0),
     m_DisplayFps(0),
     m_VideoStats(videoStats)
@@ -72,7 +72,7 @@ Pacer::~Pacer()
     else {
         // Notify the renderer that it is being destroyed soon
         // NB: This must happen on the same thread that calls renderFrame().
-        m_VsyncRenderer->cleanupRenderContext();
+        m_Renderer->cleanupRenderContext();
     }
 
     // Delete any remaining unconsumed frames
@@ -87,11 +87,11 @@ Pacer::~Pacer()
     av_frame_free(&m_DeferredFreeFrame);
 }
 
-void Pacer::renderOnMainThread()
+bool Pacer::renderOnMainThread()
 {
     // Ignore this call for renderers that work on a dedicated render thread
     if (m_RenderThread != nullptr) {
-        return;
+        return false;
     }
 
     m_FrameQueueLock.lock();
@@ -105,6 +105,7 @@ void Pacer::renderOnMainThread()
     else {
         m_FrameQueueLock.unlock();
     }
+    return true;
 }
 
 int Pacer::vsyncThread(void *context)
@@ -157,7 +158,7 @@ int Pacer::renderThread(void* context)
 
     while (!me->m_Stopping) {
         // Wait for the renderer to be ready for the next frame
-        me->m_VsyncRenderer->waitToRender();
+        me->m_Renderer->waitToRender();
 
         // Acquire the frame queue lock to protect the queue and
         // the not empty condition
@@ -182,7 +183,7 @@ int Pacer::renderThread(void* context)
 
     // Notify the renderer that it is being destroyed soon
     // NB: This must happen on the same thread that calls renderFrame().
-    me->m_VsyncRenderer->cleanupRenderContext();
+    me->m_Renderer->cleanupRenderContext();
 
     return 0;
 }
@@ -275,7 +276,7 @@ bool Pacer::initialize(PDECODER_PARAMETERS params)
     SDL_Window* window = params->window;
     m_MaxVideoFps = params->frameRate;
     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
-    m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
+    m_RendererAttributes = m_Renderer->getRendererAttributes();
     bool enablePacing = params->enableFramePacing
                      || (params->enableVsync && (m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING));
 
@@ -310,13 +311,14 @@ bool Pacer::initialize(PDECODER_PARAMETERS params)
             break;
     #endif
 
-    #ifdef Q_OS_DARWIN
-        case SDL_SYSWM_COCOA:
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Frame pacing: using macOS DisplayLink");
-            m_VsyncSource = new DisplayLinkSource(this);
-            break;
-    #endif
+    // Maybe this was missing for a reason
+    // #ifdef Q_OS_DARWIN
+    //     case SDL_SYSWM_COCOA:
+    //         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+    //                     "Frame pacing: using macOS DisplayLink");
+    //         m_VsyncSource = new DisplayLinkSource(this);
+    //         break;
+    // #endif
 
         default:
             // Platforms without a VsyncSource will just render frames
@@ -345,7 +347,7 @@ bool Pacer::initialize(PDECODER_PARAMETERS params)
         m_VsyncThread = SDL_CreateThread(Pacer::vsyncThread, "PacerVsync", this);
     }
 
-    if (m_VsyncRenderer->isRenderThreadSupported()) {
+    if (m_Renderer->isRenderThreadSupported()) {
         m_RenderThread = SDL_CreateThread(Pacer::renderThread, "PacerRender", this);
     }
 
@@ -364,7 +366,7 @@ void Pacer::renderFrame(AVFrame* frame)
     m_VideoStats->totalPacerTimeUs += (beforeRender - (uint64_t)frame->pkt_dts);
 
     // Render it
-    m_VsyncRenderer->renderFrame(frame);
+    m_Renderer->renderFrame(frame);
     uint64_t afterRender = LiGetMicroseconds();
 
     m_VideoStats->totalRenderTimeUs += (afterRender - beforeRender);

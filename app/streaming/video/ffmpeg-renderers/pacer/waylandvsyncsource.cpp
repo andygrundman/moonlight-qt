@@ -10,7 +10,7 @@ const struct wl_callback_listener WaylandVsyncSource::s_FrameListener = {
     .done = WaylandVsyncSource::frameDone,
 };
 
-WaylandVsyncSource::WaylandVsyncSource(Pacer* pacer)
+WaylandVsyncSource::WaylandVsyncSource(IFramePacer* pacer)
     : m_Pacer(pacer),
       m_Display(nullptr),
       m_Surface(nullptr),

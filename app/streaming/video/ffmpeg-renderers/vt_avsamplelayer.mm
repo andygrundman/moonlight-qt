@@ -2,7 +2,7 @@
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
-#include "pacer/pacer.h"
+#include "framepacing/framepacer.h"
 #undef AVMediaType
 
 #include <SDL_syswm.h>
