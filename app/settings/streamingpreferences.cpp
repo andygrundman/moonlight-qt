@@ -138,7 +138,6 @@ void StreamingPreferences::reload()
     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
     enableVsync = settings.value(SER_VSYNC, true).toBool();
     gameOptimizations = settings.value(SER_GAMEOPTS, true).toBool();
-    spatialHeadTracking = settings.value(SER_HEADTRACKING, false).toBool();
     playAudioOnHost = settings.value(SER_HOSTAUDIO, false).toBool();
     multiController = settings.value(SER_MULTICONT, true).toBool();
     enableMdns = settings.value(SER_MDNS, true).toBool();
@@ -165,7 +164,7 @@ void StreamingPreferences::reload()
     audioConfig = static_cast<AudioConfig>(settings.value(SER_AUDIOCFG,
                                                   static_cast<int>(AudioConfig::AC_STEREO)).toInt());
     spatialAudioConfig = static_cast<SpatialAudioConfig>(settings.value(SER_SPATIALAUDIOCFG,
-                                                  static_cast<int>(SpatialAudioConfig::SAC_AUTO)).toInt());
+                                                  static_cast<int>(SpatialAudioConfig::SAC_DISABLED)).toInt());
     videoCodecConfig = static_cast<VideoCodecConfig>(settings.value(SER_VIDEOCFG,
                                                   static_cast<int>(VideoCodecConfig::VCC_AUTO)).toInt());
     videoDecoderSelection = static_cast<VideoDecoderSelection>(settings.value(SER_VIDEODEC,
@@ -356,7 +355,6 @@ void StreamingPreferences::save()
     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
     settings.setValue(SER_VSYNC, enableVsync);
     settings.setValue(SER_GAMEOPTS, gameOptimizations);
-    settings.setValue(SER_HEADTRACKING, spatialHeadTracking);
     settings.setValue(SER_HOSTAUDIO, playAudioOnHost);
     settings.setValue(SER_MULTICONT, multiController);
     settings.setValue(SER_MDNS, enableMdns);

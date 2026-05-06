@@ -1,9 +1,8 @@
 #pragma once
 
 #include "imgui.h"
-#include "settings/streamingpreferences.h"
-
 #include "SDL_compat.h"
+#include "settings/streamingpreferences.h"
 
 class GamepadMenu
 {
@@ -11,9 +10,9 @@ class GamepadMenu
     // Singleton
     static GamepadMenu& instance();
 
-    void SetVisible(bool visible, SDL_JoystickID jsid);
     bool IsVisible();
     void Render();
+    void CloseMenu();
 
   private:
     GamepadMenu();
@@ -21,5 +20,7 @@ class GamepadMenu
     GamepadMenu& operator=(const GamepadMenu&) = delete;
 
     std::atomic<bool> m_Visible {false};
+    int m_SelectedIndex = 0;
+    ImVec2 m_MousePosOnOpen = {0, 0};
     std::atomic<SDL_JoystickID> m_ActiveJoystickID {-1};
 };

@@ -139,7 +139,7 @@ public:
           m_RequestedPresentMode(StreamingPreferences::PRESENT_AUTO),
           m_MinRefreshInterval(1.0f / 60),
           m_MaxRefreshInterval(1.0f / 60),
-          m_UsingVRR{false},
+          m_SupportsVRR{false},
           m_IsPaused{false},
           m_IsVsync{true},
           m_VsyncTimestamp{0.0},
@@ -707,9 +707,8 @@ public:
 #ifndef IMGUI_DISABLE
         StreamingPreferences *prefs = StreamingPreferences::get();
         bool showDevUI = prefs->enableDeveloperUI;
-        bool showGamepadMenu = GamepadMenu::instance().IsVisible();
         // zero ImGui overhead if you don't enable it
-        if (showDevUI || showGamepadMenu) {
+        if (showDevUI) {
             ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
             ImGui_ImplSDL2_NewFrame();
             //ImGui_ImplOSX_NewFrame((NSView *)m_MetalView);
@@ -723,7 +722,7 @@ public:
             Stats::instance().RenderGraphs();
 
             if (showDevUI) DevUISettings::instance().Render();
-            if (showGamepadMenu) GamepadMenu::instance().Render();
+            GamepadMenu::instance().Render();
 
             ImGui::EndFrame();
             ImGui::Render();
@@ -857,9 +856,12 @@ public:
         // prefer the user's choice from DevUI, or use auto-detection
         pfi.presentMode = m_RequestedPresentMode;
         if (pfi.presentMode == StreamingPreferences::PRESENT_AUTO) {
-            if (m_UsingVRR.load()) {
+            if (m_SupportsVRR.load()) {
                 // display supports VRR
                 pfi.presentMode = StreamingPreferences::PRESENT_VRR;
+                // VRR should always use Immediate pacing
+                pfi.pacingMode = StreamingPreferences::FRAME_PACING_IMMEDIATE;
+                FramePacer::instance().SetPacingMode(pfi.pacingMode);
             }
             else if (m_IsVsync.load()) {
                 // vsync enabled
@@ -869,6 +871,13 @@ public:
                 // vsync disabled
                 pfi.presentMode = StreamingPreferences::PRESENT_NO_VSYNC;
             }
+        }
+
+        // If VRR is manually selected, only allow it in fullscreen
+        if (pfi.presentMode == StreamingPreferences::PRESENT_VRR && !m_IsFullScreen) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "VRR presentMode selected but app is not fullscreen, using Fixed");
+            pfi.presentMode = StreamingPreferences::PRESENT_FIXED;
         }
 
         if (pfi.presentMode == StreamingPreferences::PRESENT_VRR) {
@@ -887,7 +896,12 @@ public:
                     int64_t deltaPts = frame->pts - prevPts;
                     if (deltaPts > 0) {
                         double delta = static_cast<double>(deltaPts) / 90000.0;
-                        duration = std::clamp(delta, avgGPUTime, m_MaxRefreshInterval);
+
+                        //duration = std::clamp(delta, avgGPUTime, m_MaxRefreshInterval);
+                        // we could clamp to the monitor's reported range (m_MaxRefreshInterval),
+                        // but  will use Low-Framerate Compensation below this, so let's report accurate values as low as 1fps.
+
+                        duration = std::clamp(delta, avgGPUTime, 1.0);
 
                         FQLog("[%f] VRR mode pts %.3fs, prevPts %.3fs, delta %.3fs, bounds %.3f/%.3f, present afterMinimumDuration:%.3f ms",
                             CACurrentMediaTime(), frame->pts / 90000.0, prevPts / 90000.0, delta, avgGPUTime * 1000.0, m_MaxRefreshInterval * 1000.0, duration * 1000.0);
@@ -918,30 +932,33 @@ public:
             CFTimeInterval interval = vsyncDeadline - vsyncTimestamp;
             CFTimeInterval targetTime = vsyncDeadline + interval; // end of frame +1
 
+            if (targetQpc) {
+                // targetQpc is the current deadline, so add 1 interval
+                targetTime = QpcToMs(targetQpc) / 1000.0;
+                targetTime += interval;
+            }
+
             // If we're in Display-locked mode, make sure we're rendering every frame
             if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
                 pfi.late = false;
 
-                if (targetQpc) {
-                    targetTime = QpcToMs(targetQpc) / 1000.0;
-                }
-
-                // If our timestamp is more than 1 frame away from the previous, switch to aMD
+                // If our timestamp is more than 1 frame away from the previous
                 static CFTimeInterval lastAtTime = 0.0;
                 if (lastAtTime > 0.0) {
-                    // Because our vsync timing comes from another thread, we can sometimes see the same vsyncDeadline
-                    // for 2 frames in a row. Correct for this.
-                    if (targetTime == lastAtTime) {
-                        targetTime += interval;
-                    }
-
                     if (targetTime - lastAtTime > interval * 1.001) {
                         pfi.late = true;
                     }
+
+                    // NSLog(@"deadline %f targetTime %f sinceLast %.3fms tillDeadline %.3fms\n",
+                    //     QpcToMs(targetQpc) / 1000.0, targetTime, (targetTime - lastAtTime) * 1000.0, (targetTime - CACurrentMediaTime()) * 1000.0);
                 }
                 lastAtTime = targetTime;
             }
             pfi.atTime = targetTime;
+
+            if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
+                pfi.afterMinimumDuration = interval;
+            }
         }
 
         pfi.submittedPresentTime = CACurrentMediaTime();
@@ -1463,19 +1480,19 @@ public:
                 }
             }
 
-            m_UsingVRR.store(false);
+            m_SupportsVRR.store(false);
 
             if (isVRR) {
                 if (m_IsFullScreen) {
-                    m_UsingVRR.store(true);
+                    m_SupportsVRR.store(true);
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Output display: %s / VRR active, refresh range %.2f-%.2f Hz",
+                        "Output display: %s / VRR supported, refresh range %.2f-%.2f Hz",
                         [screen.localizedName UTF8String],
                         1.0f / m_MaxRefreshInterval, 1.0f / m_MinRefreshInterval);
                 }
                 else {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "Output display: %s @ %.2f Hz / VRR inactive (not fullscreen)",
+                        "Output display: %s @ %.2f Hz / VRR supported but inactive (not fullscreen)",
                         [screen.localizedName UTF8String], 1.0f / m_MinRefreshInterval);
                 }
             }
@@ -1649,7 +1666,7 @@ private:
     int m_RequestedPresentMode;
     CFTimeInterval m_MinRefreshInterval;
     CFTimeInterval m_MaxRefreshInterval;
-    std::atomic<bool> m_UsingVRR;
+    std::atomic<bool> m_SupportsVRR;
     std::atomic<bool> m_IsPaused;
     std::atomic<bool> m_IsVsync;
     std::atomic<double> m_VsyncTimestamp;

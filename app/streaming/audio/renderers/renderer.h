@@ -45,4 +45,8 @@ public:
             Q_UNREACHABLE();
         }
     }
+
+    virtual void setHeadTracking(bool enabled) {
+        // nothing
+    }
 };
