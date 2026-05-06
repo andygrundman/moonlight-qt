@@ -62,6 +62,7 @@ struct DevUIConfig {
     bool isVRR = false;
     int pacingMode = StreamingPreferences::FRAME_PACING_IMMEDIATE;
     int presentMode = StreamingPreferences::PRESENT_AUTO;
+    int windowMode = StreamingPreferences::WM_WINDOWED;
     bool showStats = true;
     bool showGraphs = true;
     bool enableDevUI = false;
@@ -73,6 +74,8 @@ struct DevUIConfig {
     bool proMotionAllowsVRR = false;
     bool captureGPUTrace = false;
     bool useEDR = false;
+    int spatialAudio = StreamingPreferences::SAC_DISABLED;
+    bool useHeadTracking = false;
 #endif
 };
 
@@ -93,6 +96,7 @@ struct DevUIMetrics {
     int networkDroppedFrames = 0;
     int pacerDroppedFrames = 0;
     int presentMode = StreamingPreferences::PRESENT_AUTO;
+    int windowMode = StreamingPreferences::WM_WINDOWED;
     double presentAfterMinimumDuration = 0.0;
     double presentAtTime = 0.0;
     RunningStat presentLateMs = {};
@@ -103,6 +107,19 @@ struct DevUIMetrics {
     double presentAccuracyMs = 0.0;
     float streamFps = 0.0;
     float displayHz = 0.0;
+
+    // audio
+    char audioOutputDeviceName[32] = {};
+    double audioSampleRate = 48000.0;
+    int opusChannelCount = 2;
+    int audioChannels = 2;
+    int spatialAudio = StreamingPreferences::SAC_DISABLED;
+    bool audioPersonalizedHRTF = false;
+    bool audioHeadTracking = false;
+    char audioOutputTransportType[5] = {};
+    char audioOutputDataSource[5] = {};
+    double audioTotalSoftwareLatency = 0.0;
+    double audioOutputHardwareLatency = 0.0;
 
     void reset()
     {
@@ -168,10 +185,11 @@ class DevUISettings
         cb(m_Metrics);
     }
 
+    bool IsVisible();
+    void SetPanelOpen(bool isOpen);
     void Toggle();
     void Render();
     void ResetCounters();
-    void NotifyOverlayState(bool enabled);
 
   private:
     DevUISettings();

@@ -7,9 +7,12 @@
 #import <AVFoundation/AVFoundation.h>
 #import <QtGlobal>
 
+// Global head tracking flag so it can be changed from DevUI and survive the decoder being
+// destroyed and recreated.
+std::atomic<bool> g_HeadTracking{false};
+
 AUSpatialRenderer::AUSpatialRenderer()
-    : m_HeadTracking(0),
-      m_PersonalizedHRTF(0),
+    : m_PersonalizedHRTF(0),
       m_AudioUnitLatency(0.0)
 {
     DEBUG_TRACE("AUSpatialRenderer construct");
@@ -27,6 +30,9 @@ AUSpatialRenderer::AUSpatialRenderer()
         CA_LogError(status, "Failed to create Spatial Mixer");
         assert(status == noErr);
     }
+
+    StreamingPreferences *prefs = StreamingPreferences::get();
+    g_HeadTracking.store(prefs->spatialAudioConfig == StreamingPreferences::SAC_HEAD_TRACKED);
 }
 
 AUSpatialRenderer::~AUSpatialRenderer()
@@ -72,6 +78,16 @@ void AUSpatialRenderer::clearCallback()
 double AUSpatialRenderer::getAudioUnitLatency()
 {
     return m_AudioUnitLatency;
+}
+
+bool AUSpatialRenderer::getHeadTracking()
+{
+    return g_HeadTracking.load();
+}
+
+void AUSpatialRenderer::setHeadTracking(bool enabled)
+{
+    g_HeadTracking.store(enabled);
 }
 
 void AUSpatialRenderer::setRingBufferPtr(const TPCircularBuffer *buffer)
@@ -250,16 +266,11 @@ bool AUSpatialRenderer::setup(AUSpatialMixerOutputType outputType, float sampleR
 #endif
     {
         if (outputType == kSpatialMixerOutputType_Headphones) {
-            // XXX: Both of these might require the builder to have a paid Apple developer account due to the use of entitlements.
-
             // For devices that support it, enable head-tracking.
             // Apps that use low-latency head-tracking in iOS/tvOS need to set
             // the audio session category to ambient or run in Game Mode.
             // Head tracking requires the entitlement com.apple.developer.coremotion.head-pose.
-
-            // XXX Head-tracking may cause audio glitches. It's off by default.
-            StreamingPreferences *prefs = StreamingPreferences::get();
-            if (prefs->spatialHeadTracking) {
+            if (g_HeadTracking.load()) {
                 uint32_t ht = 1;
                 status = AudioUnitSetProperty(m_Mixer, kAudioUnitProperty_SpatialMixerEnableHeadTracking, kAudioUnitScope_Global, 0, &ht, sizeof(uint32_t));
                 if (status != noErr) {
@@ -267,7 +278,6 @@ bool AUSpatialRenderer::setup(AUSpatialMixerOutputType outputType, float sampleR
                 }
                 else {
                     DEBUG_TRACE("AUSpatialRenderer enabled head-tracking");
-                    m_HeadTracking = 1;
                 }
             }
 

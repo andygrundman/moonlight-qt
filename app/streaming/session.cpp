@@ -31,13 +31,6 @@
 #define ICON_SIZE 64
 #endif
 
-#define SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER 100
-#define SDL_CODE_GAMECONTROLLER_RUMBLE 101
-#define SDL_CODE_GAMECONTROLLER_RUMBLE_TRIGGERS 102
-#define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
-#define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
-#define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
-
 #include <openssl/rand.h>
 
 #include <QtEndian>
@@ -2112,6 +2105,9 @@ void Session::exec()
             case SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS:
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
+                break;
+            case SDL_CODE_TOGGLE_FULLSCREEN:
+                toggleFullscreen();
                 break;
             default:
                 SDL_assert(false);

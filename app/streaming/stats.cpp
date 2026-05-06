@@ -615,7 +615,7 @@ void Stats::RenderGraphs()
             ImPlotSpec spec;
             spec.LineColor = DevUIColors.colors.plotLine;  // green
             clampData ctx {buffers[i], plot.desc.clampMax};
-            ImPlot::PlotLineG("values", clampGetter, &ctx, (int) countF, spec);
+            ImPlot::PlotLineG(plot.desc.unit, clampGetter, &ctx, (int) countF, spec);
 
             // Plot the label over the graph to save space.
             ImPlot::PlotText(label, (double) countF / 2.0, labelY * 0.80);
@@ -706,7 +706,7 @@ void Stats::RenderGraphs()
                 ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0f, 65.0f, ImGuiCond_Always);
 
                 clampData ctx {buffers[selectedPlot], plot.desc.clampMax};
-                ImPlot::PlotLineG("values", clampGetter, &ctx, (int) countF, spec);
+                ImPlot::PlotLineG(plot.desc.unit, clampGetter, &ctx, (int) countF, spec);
 
                 ImPlot::EndPlot();
             }
