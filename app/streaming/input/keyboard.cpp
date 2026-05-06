@@ -166,10 +166,12 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     bool shouldNotConvertToScanCodeOnServer = false;
 
 #ifndef IMGUI_DISABLE
-    ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureKeyboard) {
-        // ImGui has control of the keyboard
-        return;
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureKeyboard) {
+            // ImGui has control of the keyboard
+            return;
+        }
     }
 #endif
 

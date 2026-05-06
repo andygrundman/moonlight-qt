@@ -241,10 +241,12 @@ bool SdlInputHandler::isMouseInVideoRegion(int mouseX, int mouseY, int windowWid
     SDL_Rect src, dst;
 
 #ifndef IMGUI_DISABLE
-    ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) {
-        // ImGui has control of the mouse
-        return false;
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            // ImGui has control of the mouse
+            return false;
+        }
     }
 #endif
 

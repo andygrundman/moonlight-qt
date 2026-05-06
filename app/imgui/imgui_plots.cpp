@@ -77,6 +77,7 @@ void ImGuiPlots::ImGui_init(IFFmpegRenderer* renderer)
     //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigMacOSXBehaviors = false; // Don't swap ctrl and super
     ImGui::StyleColorsDark();
 
     ImFontConfig mainConfig;
