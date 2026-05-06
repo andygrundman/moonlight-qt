@@ -8,6 +8,8 @@
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
+#include <atomic>
+
 class CoreAudioRenderer : public IAudioRenderer
 {
 public:
@@ -20,13 +22,14 @@ public:
     virtual bool submitAudio(int bytesWritten) override;
     virtual int getCapabilities();
     virtual AudioFormat getAudioBufferFormat() override;
+    virtual void setHeadTracking(bool enabled) override;
     const char * getRendererName() { return "CoreAudio"; }
 
     friend OSStatus renderCallbackDirect(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *, uint32_t, uint32_t, AudioBufferList *);
     friend OSStatus renderCallbackSpatial(void *, AudioUnitRenderActionFlags *, const AudioTimeStamp *, uint32_t, uint32_t, AudioBufferList *);
     friend OSStatus onDeviceOverload(AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *);
     friend OSStatus onAudioNeedsReinit(AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *);
-    friend OSStatus onAudioNeedsReinit(UInt32, AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *);
+    friend OSStatus onAudioNeedsReinit(UInt32, AudioObjectID, UInt32, const AudioObjectPropertyAddress *, void *);;
 
 private:
     bool initAudioUnit();
@@ -63,7 +66,7 @@ private:
     double m_OutputSoftwareLatencyMax;
 
     // internal device state
-    bool m_needsReinit;
+    std::atomic<bool> m_needsReinit{false};
     bool m_Spatial;
     uint32_t m_SpatialOutputType;
     uint64_t m_LastDebugOutputTime;

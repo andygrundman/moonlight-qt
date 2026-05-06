@@ -388,23 +388,6 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
     }
 
-#ifndef IMGUI_DISABLED
-    // Start+Select is now the only combo and it brings up an ImGui menu
-    static bool g_ShowGamepadMenu = false;
-
-    if (state->buttons == (PLAY_FLAG | BACK_FLAG)) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Detected menu gamepad button combo");
-
-        g_ShowGamepadMenu = !g_ShowGamepadMenu;
-        GamepadMenu::instance().SetVisible(g_ShowGamepadMenu, event->which);
-
-        // Clear buttons down on this gamepad
-        LiSendMultiControllerEvent(state->index, m_GamepadMask,
-                                   0, 0, 0, 0, 0, 0, 0);
-        return;
-    }
-#else
     // Handle Start+Select+L1+R1 as a gamepad quit combo
     if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -436,7 +419,6 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                                    0, 0, 0, 0, 0, 0, 0);
         return;
     }
-#endif
 
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
@@ -793,7 +775,7 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
                         state->index);
 
             // Send a final event to let the PC know this gamepad is gone
-            LiSendMultiControllerEvent(state->index, m_GamepadMask,
+            LiSendMultiControllerEvent(0, m_GamepadMask,
                                        0, 0, 0, 0, 0, 0, 0);
 
             // Clear all remaining state from this slot
@@ -1048,4 +1030,21 @@ int SdlInputHandler::getAttachedGamepadMask()
     }
 
     return mask;
+}
+
+void SdlInputHandler::raiseAllButtons()
+{
+    int mask = getAttachedGamepadMask();
+
+    if (m_MultiController) {
+        int numJoysticks = SDL_NumJoysticks();
+        for (int i = 0; i < numJoysticks; i++) {
+            if (SDL_IsGameController(i)) {
+                LiSendMultiControllerEvent(i, mask, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+    }
+    else {
+        LiSendMultiControllerEvent(0, mask, 0, 0, 0, 0, 0, 0, 0);
+    }
 }

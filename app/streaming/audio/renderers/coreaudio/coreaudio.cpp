@@ -290,9 +290,9 @@ void CoreAudioRenderer::updateMetrics()
         strncpy(metrics.audioOutputDeviceName, m_OutputDeviceName, sizeof(metrics.audioOutputDeviceName));
         metrics.audioSampleRate = m_OutputASBD.mSampleRate;
         metrics.audioChannels = m_OutputASBD.mChannelsPerFrame;
-        metrics.spatialAudioEnabled = m_Spatial;
+        metrics.spatialAudio = m_Spatial;
         metrics.audioPersonalizedHRTF = m_SpatialAU.m_PersonalizedHRTF;
-        metrics.audioHeadTracking = m_SpatialAU.m_HeadTracking;
+        metrics.audioHeadTracking = m_SpatialAU.getHeadTracking();
         strncpy(metrics.audioOutputTransportType, m_OutputTransportType, 5);
         strncpy(metrics.audioOutputDataSource, m_OutputDataSource, 5);
         metrics.audioTotalSoftwareLatency = m_TotalSoftwareLatency;
@@ -532,7 +532,7 @@ OSStatus onAudioNeedsReinit(AudioObjectID /*inObjectID*/,
 {
     CoreAudioRenderer *me = (CoreAudioRenderer *)inClientData;
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "CoreAudioRenderer output device had a change, will reinit");
-    me->m_needsReinit = true;
+    me->m_needsReinit.store(true);
     return noErr;
 }
 
@@ -634,7 +634,7 @@ void* CoreAudioRenderer::getAudioBuffer(int* size)
 bool CoreAudioRenderer::submitAudio(int bytesWritten)
 {
     // We'll be fully recreated after any changes to the audio device, default output, etc.
-    if (m_needsReinit) {
+    if (m_needsReinit.load()) {
         return false;
     }
 
@@ -751,4 +751,11 @@ void CoreAudioRenderer::setOutputDeviceName(const CFStringRef cfstr)
 
         m_OutputDeviceName = buffer;
     }
+}
+
+void CoreAudioRenderer::setHeadTracking(bool enabled)
+{
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "CoreAudioRenderer head tracking set to %d", enabled);
+    m_SpatialAU.setHeadTracking(enabled);
+    m_needsReinit.store(true);
 }
