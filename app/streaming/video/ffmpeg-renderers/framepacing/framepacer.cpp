@@ -279,39 +279,25 @@ int FramePacer::renderThread(void* context)
         }
         t2 = QpcNow();
 
-        bool didRender = false;
         bool hitDeadline = true;
-        uint64_t presentTargetQpc = 0;
+        uint64_t presentTargetQpc = deadline;
 
-        // Immediate mode: render, present
-        if (isImmediate) {
-            didRender = me->renderModeImmediate();
-            t3 = QpcNow();
-            t4 = t3; // no waitBeforePresent
-            if (!didRender) {
-                // We're receiving a lower framerate and no frame was available,
-                // we don't call Present here and the previous frame will be re-displayed by the OS.
-                continue;
-            }
+        bool didRender = isImmediate ? me->renderModeImmediate() : me->renderModeDisplayLocked();
+        t3 = QpcNow();
+        if (!didRender) {
+            // If Immediate mode, this means We're receiving a lower framerate and no frame was available,
+            // we don't call Present here and the previous frame will be re-displayed by the OS.
+            // In Display-locked this should not happen.
+            continue;
         }
-        else {
-            didRender = me->renderModeDisplayLocked();
-            t3 = QpcNow();
-            if (!didRender) {
-                // shouldn't happen normally
-                continue;
-            }
 
-            // d-l always renders a frame, and we wait until vblank for pacing
-            presentTargetQpc = deadline;
-
-            // Experimental sleep when display-locked with no vsync. In theory this should be the
-            // lowest possible latency, but everything depends on the sleep being very precise.
-            if (!me->m_Renderer->isVsyncEnabled()) {
-                hitDeadline = me->waitBeforePresent(presentTargetQpc, MsToQpc(ewmaPresentAccuracyMs));
-            }
-            t4 = QpcNow();
+        // When running without vsync, try an experimental sleep to hit vblank. In theory this should be the
+        // lowest possible latency, but everything depends on the sleep being very precise.
+        bool vsyncEnabled = me->m_Renderer->isVsyncEnabled();
+        if (!vsyncEnabled) {
+            hitDeadline = me->waitBeforePresent(presentTargetQpc, MsToQpc(ewmaPresentAccuracyMs));
         }
+        t4 = QpcNow();
 
         // Present
         me->m_Renderer->presentFrame(me->m_CurrentFrame, presentTargetQpc);
@@ -349,10 +335,8 @@ int FramePacer::renderThread(void* context)
         double waitBeforePresentMs = QpcToMs(t4 - t3);
         double waitPostMs = QpcToMs(t5 - t4);
 
-        // accuracy average is used to improve accuracy
         double presentAccuracyMs = 0.0;
-        double presentAccuracyMetric = 0.0;
-        if (presentTargetQpc) {
+        if (!vsyncEnabled) {
             presentAccuracyMs = std::abs(QpcToMs(t4 - presentTargetQpc));
             const double pAlpha = 0.25;
             ewmaPresentAccuracyMs = (presentAccuracyMs * pAlpha) + (ewmaPresentAccuracyMs * (1.0 - pAlpha));
@@ -393,8 +377,8 @@ int FramePacer::renderThread(void* context)
             metrics.renderLoopWaitPostMs.add(waitPostMs);
             metrics.frametimeClientMs.add(frametimeMs);
             metrics.frametimeHostMs.add(hostFrametimeMs);
-            if (presentTargetQpc) metrics.presentAccuracyMs = ewmaPresentAccuracyMs;
-            if (presentTargetQpc && !hitDeadline) ++metrics.presentMissed;
+            if (!vsyncEnabled) metrics.presentAccuracyMs = ewmaPresentAccuracyMs;
+            if (!vsyncEnabled && !hitDeadline) ++metrics.presentMissed;
         });
     #endif
     }
@@ -708,8 +692,13 @@ void FramePacer::signalVsyncTS(double timestamp, double deadline)
         }
     }
 
-    FQLog("signalVsyncTS(): timestamp %f, deadline %f, drift %.3f (avg %.3f)\n",
-        timestamp, deadline, QpcToMs(driftQpc), QpcToMs(m_ewmaVsyncDriftQpc));
+    static double lastDeadline = 0.0;
+    if (lastDeadline > 0.0) {
+        double interval = deadline - lastDeadline;
+        FQLog("signalVsyncTS(): interval %.3fms timestamp %f, deadline %f, drift %.3f (avg %.3f)\n",
+            interval * 1000.0, timestamp, deadline, QpcToMs(driftQpc), QpcToMs(m_ewmaVsyncDriftQpc));
+    }
+    lastDeadline = deadline;
 
     m_WaitVsync.notify_all();
 }

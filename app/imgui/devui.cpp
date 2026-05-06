@@ -26,11 +26,17 @@ DevUISettings::DevUISettings() {}
 void DevUISettings::InitFromPrefs(StreamingPreferences& prefs)
 {
     DevUIConfig cfg;
-    cfg.maxFramesInFlight = std::clamp(prefs.vtMetalFramesInFlight, 2, 3);
     cfg.pacingMode = prefs.framePacingMode;
     cfg.presentMode = prefs.presentMode;
+    cfg.windowMode = prefs.windowMode;
     cfg.showStats = prefs.showPerformanceOverlay;
     cfg.showGraphs = prefs.showPerformanceGraphs;
+
+#ifdef __APPLE__
+    cfg.maxFramesInFlight = std::clamp(prefs.vtMetalFramesInFlight, 2, 3);
+    cfg.spatialAudio = prefs.spatialAudioConfig;
+    cfg.useHeadTracking = prefs.spatialAudioConfig == StreamingPreferences::SAC_HEAD_TRACKED;
+#endif
 
     // Everything is disabled if the Qt setting is disabled
     m_Enabled.store(prefs.enableDeveloperUI);
@@ -94,6 +100,20 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
         // picked up by renderer (vt_metal notifyOverlayUpdated)
     }
 
+    if (old.windowMode != config.windowMode) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "DevUI: Pending change of windowMode from %d to %d",
+                    old.windowMode,
+                    config.windowMode);
+
+        // toggleFullscreen() will recreate the decoder which is running ImGui,
+        // so use an SDL event instead
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_TOGGLE_FULLSCREEN;
+        SDL_PushEvent(&event);
+    }
+
     if (old.flushQueue != config.flushQueue) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "DevUI: Flushed frame queue");
         FrameQueue::instance().clear();
@@ -155,6 +175,17 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     old.useEDR,
                     config.useEDR);
         // picked up by renderer (vt_metal notifyOverlayUpdated)
+    }
+
+    if (old.useHeadTracking != config.useHeadTracking) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "DevUI: Pending change of head tracking from %d to %d",
+                    old.useHeadTracking,
+                    config.useHeadTracking);
+
+        if (Session::get()->getAudioRenderer() != nullptr) {
+             Session::get()->getAudioRenderer()->setHeadTracking(config.useHeadTracking);
+        }
     }
 
     std::lock_guard<std::mutex> lock(m_Mutex);
@@ -255,6 +286,16 @@ static void HelpMarker(const char* desc)
     }
 }
 
+bool DevUISettings::IsVisible()
+{
+    return m_panelOpen.load();
+}
+
+void DevUISettings::SetPanelOpen(bool isOpen)
+{
+    m_panelOpen.store(isOpen);
+}
+
 void DevUISettings::Toggle()
 {
     m_panelOpen.store( !m_panelOpen.load() );
@@ -307,6 +348,7 @@ void DevUISettings::Render()
         ImGui::SetNextWindowBgAlpha(0.70f);
 
         if (ImGui::Begin("Advanced Controls", &panelOpen, commonFlags)) {
+            ImGui::SeparatorText("Video");
             ImGui::PushTextWrapPos();
 
             ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
@@ -319,8 +361,32 @@ void DevUISettings::Render()
                 "shows new or repeated frames based on PTS timestamps."
             );
 
+            // Because we're ignoring windowMode=0 (Fullscreen) we have to manually handle the combo
             ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
-            static const char* presentModeItems[] = {"Auto", "Fixed Vsync", "VRR", "No Vsync"};
+            static const char* windowModeItems[] = {"Borderless Fullscreen", "Windowed"};
+            static int wm_selected_idx = std::clamp(cfg.windowMode - 1, 0, 1);
+            const char* windowModeValue = windowModeItems[wm_selected_idx];
+            if (ImGui::BeginCombo("Window mode", windowModeValue, 0)) {
+                for (int n = 0; n < IM_COUNTOF(windowModeItems); n++) {
+                    const bool is_selected = (wm_selected_idx == n);
+                    if (ImGui::Selectable(windowModeItems[n], is_selected)) {
+                        wm_selected_idx = n;
+                        cfg.windowMode = n + 1;
+                        configChanged = true;
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+            static const char* presentModeItems[] = {
+                "Auto",
+                "Fixed Vsync",
+                "VRR",
+                "No Vsync"};
             configChanged |=
                 ImGui::Combo("Present mode", &cfg.presentMode, presentModeItems, IM_ARRAYSIZE(presentModeItems));
 
@@ -365,7 +431,8 @@ void DevUISettings::Render()
                 ImGui::EndCombo();
             }
 
-            configChanged |= ImGui::SliderInt("Frame queue size", &cfg.frameQueueHigh, 1, 3);
+            // There is no benefit from tweaking the queue high watermark
+            // configChanged |= ImGui::SliderInt("Frame queue size", &cfg.frameQueueHigh, 1, 3);
 
             // This doesn't really need to be changed
             // configChanged |= ImGui::SliderInt("Metrics update rate", &cfg.metricsUpdateRate, 1, 120);
@@ -406,161 +473,171 @@ void DevUISettings::Render()
                 ImGui::ShowDemoWindow(&show_demo_window);
             }
 
-            // Live metrics
-            if (ImGui::CollapsingHeader("Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Text("FPS: %.02fms / Display: %.02f Hz", metrics.streamFps, metrics.displayHz);
-                ImGui::Text("Frame queue: %zu/%d", FrameQueue::instance().count(), cfg.frameQueueHigh);
-                ImGui::SameLine();
-                HelpMarker(
-                    "Ideal value: 1.0.\n\nThis small queue holds frames from arrival until they are processed by "
-                    "waitFrame. If the render loop falls behind, "
-                    "frames can build up in this queue and eventually the oldest frames will be dropped. One reason for "
-                    "falling behind can be receiving too many frames from the host. "
-                    "Even a 0.1% difference, such as a 59.94hz client receiving 60fps will fall behind, requiring a "
-                    "dropped frame several times a minute."
-                );
-                ImGui::SameLine();
-                if (ImGui::Button("Flush queue")) {
-                    cfg.flushQueue = true;
-                    configChanged = true;
-                }
-
-                ImGui::Text("Frame count: %06d, lost: %02d, dropped: %02d",
-                            metrics.totalFrames,
-                            metrics.networkDroppedFrames,
-                            metrics.pacerDroppedFrames);
-                ImGui::SameLine();
-                if (ImGui::Button("Reset counters")) {
-                    cfg.resetCounters = true;
-                    configChanged = true;
-                }
-
-                DrawFrameTimingBar("Frame",
-                                   metrics.renderLoopWaitFrameMs.last,
-                                   DevUIColors.colors.preWait,
-                                   metrics.renderLoopRenderMs.last,
-                                   DevUIColors.colors.render,
-                                   metrics.renderLoopWaitBeforePresentMs.last,
-                                   DevUIColors.colors.waitPresent,
-                                   metrics.renderLoopWaitPostMs.last,
-                                   DevUIColors.colors.waitEnd);
-
-                ImGui::Text("Render total         %.3f ms", metrics.renderLoopTotalMs.last);
-                // ImGui::Text("  waitGPU            %.3f ms", metrics.renderLoopWaitGPUMs.last);
-                ImGui::TextColored(DevUIColors.colors.preWait,
-                                   "  waitFrame          %.3f ms",
-                                   metrics.renderLoopWaitFrameMs.last);
-                ImGui::SameLine();
-                HelpMarker(
-                    "Time spent waiting for a new frame to arrive from the host, if necessary. Optimal value is anything "
-                    "above 0, meaning the frame queue is running at 1.0 and not adding latency."
-                );
-                ImGui::TextColored(DevUIColors.colors.render,
-                                   "  render             %.3f ms",
-                                   metrics.renderLoopRenderMs.last);
-                ImGui::SameLine();
-                HelpMarker(
-                    "Time spent drawing everything in the frame: the host's video frame, stat overlays, graphs, this UI. "
-                    "Typical value: < 1ms "
-                );
-                ImGui::TextColored(DevUIColors.colors.waitPresent,
-                                   "  waitPresent        %.3f ms",
-                                   metrics.renderLoopWaitBeforePresentMs.last);
-                ImGui::SameLine();
-                HelpMarker(
-                    "Time spent waiting to align with the vblank interval. A very accurate sleep is performed so that "
-                    "Present is called shortly before the vblank."
-                );
-                ImGui::TextColored(DevUIColors.colors.waitEnd,
-                                   "  waitEnd            %.3f ms",
-                                   metrics.renderLoopWaitPostMs.last);
-                ImGui::SameLine();
-                HelpMarker(
-                    "Typical value: most of 1 frame\n\nTime spent waiting to obtain the next frame's drawable texture from "
-                    "the GPU. This delay is the main driver of frame pacing."
-                );
+            if (Session::get()->getAudioRenderer() != nullptr) {
+                Session::get()->getAudioRenderer()->updateMetrics();
             }
 
-            if (ImGui::CollapsingHeader("Present Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-                switch (metrics.presentMode) {
-                    case StreamingPreferences::PRESENT_AUTO:  // won't happen
-                    case StreamingPreferences::PRESENT_VRR:
-                        ImGui::Text("Mode:                VRR, interval %.3fms",
-                                    metrics.presentAfterMinimumDuration * 1000.0);
-                        ImGui::SameLine();
-                        HelpMarker(
-                            "VRR mode, which requires fullscreen or borderless, delivers frames with varying frametimes "
-                            "based on the range of the display.\n"
-                            "If 'Pace VRR frames using PTS' is enabled, each frame is scheduled according to the length of "
-                            "time it was displayed on the host. Disable this option if it doesn't appear smooth."
-                        );
-                        break;
-                    case StreamingPreferences::PRESENT_FIXED:
-                        ImGui::Text("Mode:                Fixed @ %.02f Hz", metrics.displayHz);
-                        ImGui::SameLine();
-                        HelpMarker(
-                            "In Immediate mode, frames are aligned to vsync timestamps when at full framerate. At lower "
-                            "framerates, frames are scheduled with a duration matching the refresh rate.\n\n"
-                            "In Display-locked mode, every frame is aligned using vsync timestamps. Incoming frames are "
-                            "displayed or repeated as needed to best match their original timing."
-                        );
-                        break;
-                    case StreamingPreferences::PRESENT_NO_VSYNC:
-                        ImGui::Text("Mode:                No Vsync");
-                        ImGui::SameLine();
-                        HelpMarker(
-                            "With vsync disabled, frames are presented with no regard to timing. Screen tearing and "
-                            "stuttering will occur, but this mode should have the lowest latency."
-                        );
-                        break;
-                }
-
-                ImGui::Text("Present delay:       %.3f ms", metrics.presentDelayMs.last);
+            ImGui::SeparatorText("Audio");
+            ImGui::Text("Input stream: %s-channel Opus low-delay @ 48 kHz",
+                metrics.opusChannelCount == 6 ? "5.1" : metrics.opusChannelCount == 8 ? "7.1" : "2");
+            ImGui::Text("Output device: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
+            ImGui::Text("Render mode: %s %s %s %s",
+                metrics.spatialAudio != StreamingPreferences::SAC_DISABLED ?
+                    (metrics.audioPersonalizedHRTF ? "personalized spatial audio" : "spatial audio") : "passthrough",
+                metrics.spatialAudio == StreamingPreferences::SAC_HEAD_TRACKED ? "with head-tracking for" : "for",
+                !strcmp(metrics.audioOutputTransportType, "blue") ? "Bluetooth"
+                    : !strcmp(metrics.audioOutputTransportType, "bltn") ? "built-in"
+                    : !strcmp(metrics.audioOutputTransportType, "usb ") ? "USB"
+                    : !strcmp(metrics.audioOutputTransportType, "hdmi") ? "HDMI"
+                    : !strcmp(metrics.audioOutputTransportType, "airp") ? "AirPlay"
+                    : metrics.audioOutputTransportType,
+                !strcmp(metrics.audioOutputDataSource      , "hdpn") ? "headphones"
+                    : !strcmp(metrics.audioOutputDataSource, "ispk") ? "internal speakers"
+                    : !strcmp(metrics.audioOutputDataSource, "espk") ? "external speakers"
+                    : metrics.audioOutputDataSource);
+            ImGui::Text("Latency: %0.1fms (buffers %.1fms, hardware: %.1fms)",
+                (metrics.audioTotalSoftwareLatency + metrics.audioOutputHardwareLatency) * 1000.0,
+                metrics.audioTotalSoftwareLatency * 1000.0, metrics.audioOutputHardwareLatency * 1000.0);
+            if (metrics.spatialAudio != StreamingPreferences::SAC_DISABLED) {
+                configChanged |= ImGui::Checkbox("Enable head-tracking", &cfg.useHeadTracking);
                 ImGui::SameLine();
                 HelpMarker(
-                    "Present delay is the interval between the time a frame is presented and when it hits the display.\n"
-                    "Typical macOS numbers at 120hz:\n"
-                    "  2 frames in flight (double-buffered): 24ms\n"
-                    "  3 frames in flight (triple-buffered): 31ms\n"
-                    "  No vsync: < 8ms\n"
-                );
-                ImGui::Text("Present interval:    %.3f ms", metrics.presentIntervalMs.last);
-                if (cfg.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
-                    ImGui::Text("Present accuracy:    %.3f ms", metrics.presentAccuracyMs);
-                    ImGui::Text("Missed:              %5d", metrics.presentMissed);
-                    ImGui::Text("D-L missed:          %5d", metrics.displayLockedMissed);
-                }
+                    "Head-tracking works best when Game Mode is active and Moonlight is running fullscreen. Game Mode reduces Bluetooth latency in AirPods from 160ms to about 80ms, although this number is not reflected in the hardware latency number.\n\n"
+                    "Audio glitches are more common when head-tracking is enabled.");
+            }
+
+
+            // Live metrics
+            ImGui::SeparatorText("Metrics");
+            ImGui::Text("FPS: %.02f / Display: %.02f Hz", metrics.streamFps, metrics.displayHz);
+            ImGui::Text("Frame queue: %zu/%d", FrameQueue::instance().count(), cfg.frameQueueHigh);
+            ImGui::SameLine();
+            HelpMarker(
+                "Ideal value: 1.0.\n\nThis small queue holds frames from arrival until they are processed by "
+                "waitFrame. If the render loop falls behind, "
+                "frames can build up in this queue and eventually the oldest frames will be dropped. One reason for "
+                "falling behind can be receiving too many frames from the host. "
+                "Even a 0.1% difference, such as a 59.94hz client receiving 60fps will fall behind, requiring a "
+                "dropped frame several times a minute."
+            );
+            ImGui::SameLine();
+            if (ImGui::Button("Flush queue")) {
+                cfg.flushQueue = true;
+                configChanged = true;
+            }
+
+            ImGui::Text("Frame count: %06d, lost: %02d, dropped: %02d",
+                        metrics.totalFrames,
+                        metrics.networkDroppedFrames,
+                        metrics.pacerDroppedFrames);
+            ImGui::SameLine();
+            if (ImGui::Button("Reset counters")) {
+                cfg.resetCounters = true;
+                configChanged = true;
+            }
+
+            // This turned out less useful than I hoped
+            // DrawFrameTimingBar("Frame",
+            //                     metrics.renderLoopWaitFrameMs.last,
+            //                     DevUIColors.colors.preWait,
+            //                     metrics.renderLoopRenderMs.last,
+            //                     DevUIColors.colors.render,
+            //                     metrics.renderLoopWaitBeforePresentMs.last,
+            //                     DevUIColors.colors.waitPresent,
+            //                     metrics.renderLoopWaitPostMs.last,
+            //                     DevUIColors.colors.waitEnd);
+
+            ImGui::Text("Render total         %.3f ms", metrics.renderLoopTotalMs.last);
+            // ImGui::Text("  waitGPU            %.3f ms", metrics.renderLoopWaitGPUMs.last);
+            ImGui::TextColored(DevUIColors.colors.preWait,
+                                "  waitFrame          %.3f ms",
+                                metrics.renderLoopWaitFrameMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Time spent waiting for a new frame to arrive from the host, if necessary. Optimal value is anything "
+                "above 0, meaning the frame queue is running at 1.0 and not adding latency."
+            );
+            ImGui::TextColored(DevUIColors.colors.render,
+                                "  render             %.3f ms",
+                                metrics.renderLoopRenderMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Time spent drawing everything in the frame: the host's video frame, stat overlays, graphs, this UI. "
+                "Typical value: < 1ms "
+            );
+            ImGui::TextColored(DevUIColors.colors.waitPresent,
+                                "  waitPresent        %.3f ms",
+                                metrics.renderLoopWaitBeforePresentMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Time spent waiting to align with the vblank interval. A very accurate sleep is performed so that "
+                "Present is called shortly before the vblank."
+            );
+            ImGui::TextColored(DevUIColors.colors.waitEnd,
+                                "  waitEnd            %.3f ms",
+                                metrics.renderLoopWaitPostMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Typical value: most of 1 frame\n\nTime spent waiting to obtain the next frame's drawable texture from "
+                "the GPU. This delay is the main driver of frame pacing."
+            );
+
+            switch (metrics.presentMode) {
+                case StreamingPreferences::PRESENT_AUTO:  // won't happen
+                case StreamingPreferences::PRESENT_VRR:
+                    ImGui::Text("Mode:                VRR, interval %.3fms",
+                                metrics.presentAfterMinimumDuration * 1000.0);
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "VRR mode, which requires borderless fullscreen, delivers frames with varying frametimes "
+                        "based on the range of the display.\n"
+                        "If 'Pace VRR frames using PTS' is enabled, each frame is scheduled according to the length of "
+                        "time it was displayed on the host. Disable this option if it doesn't appear smooth."
+                    );
+                    break;
+                case StreamingPreferences::PRESENT_FIXED:
+                    ImGui::Text("Mode:                Fixed @ %.02f Hz", metrics.displayHz);
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "In Immediate mode, frames are aligned to vsync timestamps when at full framerate. At lower "
+                        "framerates, frames are scheduled with a duration matching the refresh rate.\n\n"
+                        "In Display-locked mode, every frame is aligned using vsync timestamps. Incoming frames are "
+                        "displayed or repeated as needed to best match their original timing."
+                    );
+                    break;
+                case StreamingPreferences::PRESENT_NO_VSYNC:
+                    ImGui::Text("Mode:                No Vsync");
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "With vsync disabled, frames are presented with no regard to timing. Screen tearing and "
+                        "stuttering will occur, but this mode should have the lowest latency."
+                    );
+                    break;
+            }
+
+            ImGui::Text("Present delay:       %.3f ms", metrics.presentDelayMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Present delay is the interval between the time a frame is presented and when it hits the display."
+            );
+            ImGui::Text("Present interval:    %.3f ms", metrics.presentIntervalMs.last);
+            if (metrics.presentMode == StreamingPreferences::PRESENT_NO_VSYNC) {
+                ImGui::Text("Present accuracy:    %.3f ms", metrics.presentAccuracyMs);
+                ImGui::SameLine();
+                HelpMarker(
+                    "This is an experimental mode. When vsync is disabled, we try to wait and send presents as close as possible to the display refresh.\n\n"
+                    "If done perfectly, it is possible to avoid screen tearing while also having very low latency (see SpecialK and Moonlight for Xbox).\n\n"
+                    "Present accuracy is an average of how close we got without going over, and is used to adjust future sleeps.\n\n");
+                ImGui::Text("Presents missed (N-V):      %5d", metrics.presentMissed);
+                ImGui::SameLine();
+                HelpMarker("The number of times no-vsync overslept the sleep target.");
+            }
+            if (cfg.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
+                ImGui::Text("Presents missed (D-L):  %5d", metrics.displayLockedMissed);
+                ImGui::SameLine();
+                HelpMarker("How many times the display-locked renderer missed a screen refresh. This can be our fault or the system's.");
             }
             ImGui::PopTextWrapPos();
-        }
-        ImGui::End();
-    }
-
-    // Minimized DevUI window
-    if (!panelOpen) {
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing |
-                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
-                                        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar;
-
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImVec2 work_pos = viewport->WorkPos;  // Use work area to avoid menu-bar/task-bar, if any!
-        ImVec2 work_size = viewport->WorkSize;
-        ImVec2 window_pos;
-        window_pos.x = work_pos.x + work_size.x - 24.0;
-        window_pos.y = work_pos.y + (work_size.y * 0.5);
-        ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always);
-
-        if (ImGui::Begin("##DevUITab", nullptr, window_flags)) {
-            ImVec2 buttonPos = ImGui::GetCursorScreenPos();
-            auto btnColor = ImGui::IsItemHovered() ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 32);
-            ImGui::PushStyleColor(ImGuiCol_Text, btnColor);
-            ImGui::Text("%s", ICON_FA_GEARS);
-            ImGui::PopStyleColor();
-
-            ImGui::SetCursorScreenPos(buttonPos);
-            if (ImGui::InvisibleButton("##DevUITabButton", ImVec2(24.0f, 24.0f))) {
-                panelOpen = true;
-            }
         }
         ImGui::End();
     }
@@ -677,15 +754,10 @@ void DevUISettings::DrawFrameTimingBar(const char* label,
     ImGui::Dummy(barSize);
 }
 
-void DevUISettings::NotifyOverlayState(bool enabled)
-{
-    m_panelOpen.store(enabled);
-}
-
-    // Colors
-    #define RGBGetBValue(rgb) (rgb & 0x000000FF)
-    #define RGBGetGValue(rgb) ((rgb >> 8) & 0x000000FF)
-    #define RGBGetRValue(rgb) ((rgb >> 16) & 0x000000FF)
+// Colors
+#define RGBGetBValue(rgb) (rgb & 0x000000FF)
+#define RGBGetGValue(rgb) ((rgb >> 8) & 0x000000FF)
+#define RGBGetRValue(rgb) ((rgb >> 16) & 0x000000FF)
 
 void DevColors::InitColors(bool outputIsPQ)
 {

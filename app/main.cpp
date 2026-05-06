@@ -454,7 +454,7 @@ int main(int argc, char *argv[])
     // The HUD only responds to this env var and it must be defined prior to using Metal
     // I can't find a way to enable it only for SDL, but a hacky workaround is to set opacity to 0%.
     qputenv("MTL_HUD_ENABLED", "1");
-    //qputenv("MTL_HUD_DISABLE_MENU_BAR", "1");
+    qputenv("MTL_HUD_DISABLE_MENU_BAR", "1");
     qputenv("MTL_HUD_OPACITY", "0.0");
 #endif
 

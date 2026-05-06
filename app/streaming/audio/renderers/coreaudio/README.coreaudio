@@ -31,9 +31,6 @@ with QuickTime on macOS.
 The design and program flow of the example app is overly complex, even though it only uses 2 AudioUnits: one in stereo for final output
 and one that is a SpatialMixer. Perhaps they really wanted to show off mixing Swift UI with advanced Obj-C++ using closures/lambdas.
 
-I've left in some sections of the code that are platform-specific (iOS needs to use different audio APIs). This will
-hopefully make it easier to port this to moonlight-ios.
-
 Apple example:
 
 AudioFileReader->pullAudioBlock() <- N channel local WAV file (the example has a few 7.1.4 samples)

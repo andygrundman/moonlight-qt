@@ -11,6 +11,14 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 
+#define SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER 100
+#define SDL_CODE_GAMECONTROLLER_RUMBLE 101
+#define SDL_CODE_GAMECONTROLLER_RUMBLE_TRIGGERS 102
+#define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
+#define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
+#define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
+#define SDL_CODE_TOGGLE_FULLSCREEN 106
+
 class SupportedVideoFormatList : public QList<int>
 {
 public:
@@ -121,11 +129,23 @@ public:
         return m_OverlayManager;
     }
 
+    IAudioRenderer* getAudioRenderer()
+    {
+        return m_AudioRenderer;
+    }
+
+    SdlInputHandler* getInputHandler()
+    {
+        return m_InputHandler;
+    }
+
     void flushWindowEvents();
 
     void setShouldExit(bool quitHostApp = false);
 
     void toggleMouseEmulation(SDL_JoystickID jsid);
+
+    void toggleFullscreen();
 
 signals:
     void stageStarting(QString stage);
@@ -166,8 +186,6 @@ private:
 
     void getWindowDimensions(int& x, int& y,
                              int& width, int& height);
-
-    void toggleFullscreen();
 
     void notifyMouseEmulationMode(bool enabled);
 
