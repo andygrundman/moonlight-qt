@@ -18,6 +18,8 @@ public:
     void clearCallback();
 
     double getAudioUnitLatency();
+    bool getHeadTracking();
+    void setHeadTracking(bool enabled);
     void setRingBufferPtr(const TPCircularBuffer* __nonnull buffer);
     void setStatsTrackRenderBlock(SimpleBlock _Nonnull);
     bool setup(AUSpatialMixerOutputType outputType, float sampleRate, int inChannelCount);
@@ -31,7 +33,6 @@ public:
                     uint32_t, uint32_t,
                     AudioBufferList * _Nonnull);
 
-    uint32_t m_HeadTracking;
     uint32_t m_PersonalizedHRTF;
 
 private:

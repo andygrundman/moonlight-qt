@@ -28,7 +28,8 @@ public:
 
     enum SpatialAudioConfig
     {
-        SAC_AUTO,
+        SAC_FIXED,
+        SAC_HEAD_TRACKED,
         SAC_DISABLED
     };
     Q_ENUM(SpatialAudioConfig)
@@ -146,7 +147,6 @@ public:
     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
     Q_PROPERTY(bool enableVsync MEMBER enableVsync NOTIFY enableVsyncChanged)
     Q_PROPERTY(bool gameOptimizations MEMBER gameOptimizations NOTIFY gameOptimizationsChanged)
-    Q_PROPERTY(bool spatialHeadTracking MEMBER spatialHeadTracking NOTIFY spatialHeadTrackingChanged)
     Q_PROPERTY(bool playAudioOnHost MEMBER playAudioOnHost NOTIFY playAudioOnHostChanged)
     Q_PROPERTY(bool multiController MEMBER multiController NOTIFY multiControllerChanged)
     Q_PROPERTY(bool enableMdns MEMBER enableMdns NOTIFY enableMdnsChanged)
@@ -195,7 +195,6 @@ public:
     bool autoAdjustBitrate;
     bool enableVsync;
     bool gameOptimizations;
-    bool spatialHeadTracking;
     bool playAudioOnHost;
     bool multiController;
     bool enableMdns;
@@ -241,7 +240,6 @@ signals:
     void autoAdjustBitrateChanged();
     void enableVsyncChanged();
     void gameOptimizationsChanged();
-    void spatialHeadTrackingChanged();
     void playAudioOnHostChanged();
     void multiControllerChanged();
     void unsupportedFpsChanged();

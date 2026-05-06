@@ -746,122 +746,122 @@ Flickable {
                 anchors.fill: parent
                 spacing: 5
 
-                Label {
-                    width: parent.width
-                    id: resAudioTitle
-                    text: qsTr("Audio configuration")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                }
-
-                AutoResizingComboBox {
-                    // ignore setting the index at first, and actually set it when the component is loaded
-                    Component.onCompleted: {
-                        var saved_audio = StreamingPreferences.audioConfig
-                        currentIndex = 0
-                        for (var i = 0; i < audioListModel.count; i++) {
-                            var el_audio = audioListModel.get(i).val;
-                            if (saved_audio === el_audio) {
-                                currentIndex = i
-                                break
-                            }
-                        }
-                        activated(currentIndex)
-                    }
-
-                    id: audioComboBox
-                    textRole: "text"
-                    model: ListModel {
-                        id: audioListModel
-                        ListElement {
-                            text: qsTr("Stereo")
-                            val: StreamingPreferences.AC_STEREO
-                        }
-                        ListElement {
-                            text: qsTr("5.1 surround sound")
-                            val: StreamingPreferences.AC_51_SURROUND
-                        }
-                        ListElement {
-                            text: qsTr("7.1 surround sound")
-                            val: StreamingPreferences.AC_71_SURROUND
-                        }
-                    }
-                    // ::onActivated must be used, as it only listens for when the index is changed by a human
-                    onActivated : {
-                        StreamingPreferences.audioConfig = audioListModel.get(currentIndex).val
-                    }
-                }
-
-                Label {
-                    width: parent.width
-                    id: resSpatialAudioTitle
-                    text: qsTr("Spatial audio")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                    visible: Qt.platform.os == "osx"
-                }
-
                 Row {
-                    spacing: 5
                     width: parent.width
-                    visible: Qt.platform.os == "osx"
+                    spacing: 20
 
-                    AutoResizingComboBox {
-                        // ignore setting the index at first, and actually set it when the component is loaded
-                        Component.onCompleted: {
-                            var saved_sac = StreamingPreferences.spatialAudioConfig
-                            currentIndex = 0
-                            for (var i = 0; i < spatialAudioListModel.count; i++) {
-                                var el_audio = spatialAudioListModel.get(i).val;
-                                if (saved_sac === el_audio) {
-                                    currentIndex = i
-                                    break
+                    Column {
+                        width: (parent.width - parent.spacing) * 0.5
+                        spacing: 5
+
+                        Label {
+                            id: resAudioTitle
+                            text: qsTr("Audio configuration")
+                            font.pointSize: 12
+                            wrapMode: Text.Wrap
+                        }
+
+                        AutoResizingComboBox {
+                            id: audioComboBox
+                            width: parent.width
+                            textRole: "text"
+                            Component.onCompleted: {
+                                var saved_audio = StreamingPreferences.audioConfig
+                                currentIndex = 0
+                                for (var i = 0; i < audioListModel.count; i++) {
+                                    var el_audio = audioListModel.get(i).val;
+                                    if (saved_audio === el_audio) {
+                                        currentIndex = i
+                                        break
+                                    }
+                                }
+                                activated(currentIndex)
+                            }
+
+                            model: ListModel {
+                                id: audioListModel
+                                ListElement {
+                                    text: qsTr("Stereo")
+                                    val: StreamingPreferences.AC_STEREO
+                                }
+
+                                ListElement {
+                                    text: qsTr("5.1 surround sound")
+                                    val: StreamingPreferences.AC_51_SURROUND
+                                }
+
+                                ListElement {
+                                    text: qsTr("7.1 surround sound")
+                                    val: StreamingPreferences.AC_71_SURROUND
                                 }
                             }
-                            activated(currentIndex)
-                        }
 
-                        id: spatialAudioComboBox
-                        enabled: StreamingPreferences.audioConfig != StreamingPreferences.AC_STEREO
-                        textRole: "text"
-                        model: ListModel {
-                            id: spatialAudioListModel
-                            ListElement {
-                                text: qsTr("Enabled")
-                                val: StreamingPreferences.SAC_AUTO
-                            }
-                            ListElement {
-                                text: qsTr("Disabled")
-                                val: StreamingPreferences.SAC_DISABLED
+                            onActivated: {
+                                StreamingPreferences.audioConfig = audioListModel.get(currentIndex).val
                             }
                         }
-
-                        // ::onActivated must be used, as it only listens for when the index is changed by a human
-                        onActivated : {
-                            StreamingPreferences.spatialAudioConfig = spatialAudioListModel.get(currentIndex).val
-                        }
-
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Spatial audio will be used when using any type of headphones, built-in Macbook speakers, and 2-channel USB devices.")
                     }
 
-                    CheckBox {
-                        id: spatialHeadTracking
-                        enabled: StreamingPreferences.audioConfig != StreamingPreferences.AC_STEREO && StreamingPreferences.spatialAudioConfig != StreamingPreferences.SAC_DISABLED
-                        width: parent.width
-                        text: qsTr("Enable head-tracking")
-                        font.pointSize: 12
-                        checked: StreamingPreferences.spatialHeadTracking
-                        onCheckedChanged: {
-                            StreamingPreferences.spatialHeadTracking = checked
+                    Column {
+                        width: (parent.width - parent.spacing) * 0.5
+                        spacing: 5
+                        visible: Qt.platform.os == "osx"
+
+                        Label {
+                            id: resSpatialAudioTitle
+                            text: qsTr("Spatial audio")
+                            font.pointSize: 12
+                            wrapMode: Text.Wrap
                         }
 
-                        ToolTip.delay: 1000
-                        ToolTip.timeout: 5000
-                        ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Requires supported Apple or Beats headphones")
+                        Row {
+                            spacing: 12
+                            width: parent.width
+
+                            AutoResizingComboBox {
+                                id: spatialAudioComboBox
+                                enabled: StreamingPreferences.audioConfig != StreamingPreferences.AC_STEREO
+                                textRole: "text"
+                                Component.onCompleted: {
+                                    var saved_sac = StreamingPreferences.spatialAudioConfig
+                                    currentIndex = 0
+                                    for (var i = 0; i < spatialAudioListModel.count; i++) {
+                                        var el_audio = spatialAudioListModel.get(i).val
+
+                                        if (saved_sac === el_audio) {
+                                            currentIndex = i
+                                            break
+                                        }
+                                    }
+                                    activated(currentIndex)
+                                }
+
+                                model: ListModel {
+                                    id: spatialAudioListModel
+                                    ListElement {
+                                        text: qsTr("Fixed Spatial")
+                                        val: StreamingPreferences.SAC_FIXED
+                                    }
+                                    ListElement {
+                                        text: qsTr("Head-tracked Spatial")
+                                        val: StreamingPreferences.SAC_HEAD_TRACKED
+                                    }
+                                    ListElement {
+                                        text: qsTr("Disabled")
+                                        val: StreamingPreferences.SAC_DISABLED
+                                    }
+                                }
+
+                                onActivated: {
+                                    StreamingPreferences.spatialAudioConfig = spatialAudioListModel.get(currentIndex).val
+                                }
+
+                                ToolTip.delay: 1000
+                                ToolTip.timeout: -1
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Spatial audio will be used when using any type of headphones, built-in Macbook speakers, and 2-channel USB devices.")
+                            }
+                        }
                     }
                 }
 

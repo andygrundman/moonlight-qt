@@ -132,6 +132,8 @@ public:
 
     int getAttachedGamepadMask();
 
+    void raiseAllButtons();
+
     void raiseAllKeys();
 
     void notifyMouseLeave();
