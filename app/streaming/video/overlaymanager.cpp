@@ -1,6 +1,5 @@
 #include "overlaymanager.h"
 #include "path.h"
-#include "imgui/devui.h"
 
 using namespace Overlay;
 
@@ -106,10 +105,6 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         }
 
         notifyOverlayUpdated(type);
-
-    #ifndef IMGUI_DISABLED
-        DevUISettings::instance().NotifyOverlayState(enabled);
-    #endif
     }
 }
 

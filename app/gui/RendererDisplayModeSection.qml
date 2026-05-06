@@ -177,10 +177,12 @@ Column {
             function createModel() {
                 var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', root, '')
 
-                model.append({
-                    text: qsTr("Fullscreen"),
-                    val: StreamingPreferences.WM_FULLSCREEN
-                })
+                if (Qt.platform.os !== "osx") {
+                    model.append({
+                        text: qsTr("Fullscreen"),
+                        val: StreamingPreferences.WM_FULLSCREEN
+                    })
+                }
 
                 model.append({
                     text: qsTr("Borderless windowed"),
@@ -270,143 +272,55 @@ Column {
                 qsTr("Display-locked: renders at the client refresh rate and displays new or repeat frames according to the PTS timestamp. Best for: lower fps content, video, film.")
         }
 
-        Label {
-            text: qsTr("Present mode")
-            font.pointSize: 12
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-
-        Label {
-            text: qsTr("Stats")
-            font.pointSize: 12
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-        }
-
-        AutoResizingComboBox {
-            id: presentModeComboBox
+        CheckBox {
+            id: performanceStatsCheck
             Layout.fillWidth: true
             hoverEnabled: true
-            textRole: "text"
-            enabled: !rendererComboBox.visible ||
-                     StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
+            text: qsTr("Show performance stats")
+            font.pointSize: 12
+            checked: StreamingPreferences.showPerformanceOverlay
 
-            model: ListModel {
-                id: presentModeListModel
-
-                ListElement {
-                    text: qsTr("Auto (recommended)")
-                    val: StreamingPreferences.PRESENT_AUTO
-                }
-
-                ListElement {
-                    text: qsTr("Fixed Vsync")
-                    val: StreamingPreferences.PRESENT_FIXED
-                }
-
-                ListElement {
-                    text: qsTr("VRR")
-                    val: StreamingPreferences.PRESENT_VRR
-                }
-
-                ListElement {
-                    text: qsTr("No Vsync")
-                    val: StreamingPreferences.PRESENT_NO_VSYNC
-                }
-            }
-
-            Component.onCompleted: {
-                currentIndex = 0
-                for (var i = 0; i < presentModeListModel.count; i++) {
-                    if (StreamingPreferences.presentMode === presentModeListModel.get(i).val) {
-                        currentIndex = i
-                        break
-                    }
-                }
-
-                activated(currentIndex)
-            }
-
-            onActivated: {
-                StreamingPreferences.presentMode = presentModeListModel.get(currentIndex).val
+            onCheckedChanged: {
+                StreamingPreferences.showPerformanceOverlay = checked
             }
 
             ToolTip.delay: 1000
             ToolTip.timeout: -1
             ToolTip.visible: hovered
             ToolTip.text:
-                qsTr("Auto: Will use VRR when possible, otherwise Fixed.\n\n") +
-                qsTr("Fixed (Vsync): aligns frames to the vsync interval.\n\n") +
-                qsTr("VRR: Frames are presented at varying intervals within the monitor's supported range. Low latency with no tearing.\n\n") +
-                qsTr("No Vsync: presents frames with no delay, for the lowest latency at the cost of screen tearing.")
+                qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
+                qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
+                qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
         }
 
-        Column {
-            spacing: 2
+        CheckBox {
+            id: performanceGraphsCheck
+            Layout.fillWidth: true
+            hoverEnabled: true
+            text: qsTr("Show performance graphs")
+            font.pointSize: 12
+            checked: StreamingPreferences.showPerformanceGraphs
+            enabled: !rendererComboBox.visible ||
+                        StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
 
-            CheckBox {
-                id: performanceStatsCheck
-                Layout.fillWidth: true
-                hoverEnabled: true
-                text: qsTr("Show performance stats")
-                font.pointSize: 12
-                checked: StreamingPreferences.showPerformanceOverlay
-
-                onCheckedChanged: {
-                    StreamingPreferences.showPerformanceOverlay = checked
-                }
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: -1
-                ToolTip.visible: hovered
-                ToolTip.text:
-                    qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
-                    qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
-                    qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
+            onCheckedChanged: {
+                StreamingPreferences.showPerformanceGraphs = checked
             }
 
-            CheckBox {
-                id: performanceGraphsCheck
-                Layout.fillWidth: true
-                hoverEnabled: true
-                text: qsTr("Show performance graphs")
-                font.pointSize: 12
-                checked: StreamingPreferences.showPerformanceGraphs
-                enabled: !rendererComboBox.visible ||
-                         StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
+            ToolTip.delay: 1000
+            ToolTip.timeout: -1
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr(
+                "Displays realtime graphs for monitoring Frametime, Host Frametime, Present Delay, Dropped Frames, and Network Mbps. Click on a graph to view a larger version.")
+        }
 
-                onCheckedChanged: {
-                    StreamingPreferences.showPerformanceGraphs = checked
-                }
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: -1
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr(
-                    "Displays realtime graphs for monitoring Frametime, Host Frametime, Present Delay, Dropped Frames, and Network Mbps. Click on a graph to view a larger version.")
-            }
-
-            CheckBox {
-                id: developerUICheck
-                Layout.fillWidth: true
-                hoverEnabled: true
-                text: qsTr("Enable Advanced UI")
-                font.pointSize: 12
-                checked: StreamingPreferences.enableDeveloperUI
-                enabled: !rendererComboBox.visible ||
-                         StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
-
-                onCheckedChanged: {
-                    StreamingPreferences.enableDeveloperUI = checked
-                }
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: -1
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr(
-                    "Change various rendering settings in realtime and view more detailed metrics. Use this to experiment with different frame pacing and present settings.")
-            }
+        Label {
+            Layout.columnSpan: 2
+            Layout.fillWidth: true
+            id: bitrateDesc
+            text: qsTr("Use <font color=\"skyblue\">Select+Start</font> or <font color=\"skyblue\">Ctrl+Alt+Shift+Space</font> to open the Quick Menu to show/hide stats, graphs, and other advanced controls.")
+            font.pointSize: 12
+            wrapMode: Text.WordWrap
         }
     }
 }
