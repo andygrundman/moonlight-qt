@@ -46,7 +46,7 @@ public:
         }
     }
 
-    virtual void setHeadTracking(bool enabled) {
+    virtual void setHeadTracking(bool) {
         // nothing
     }
 };
