@@ -181,7 +181,6 @@ public:
     Q_PROPERTY(FramePacingMode framePacingMode MEMBER framePacingMode NOTIFY framePacingModeChanged)
     Q_PROPERTY(PresentMode presentMode MEMBER presentMode NOTIFY presentModeChanged)
     Q_PROPERTY(bool showPerformanceGraphs MEMBER showPerformanceGraphs NOTIFY showPerformanceGraphsChanged)
-    Q_PROPERTY(bool enableDeveloperUI MEMBER enableDeveloperUI NOTIFY enableDeveloperUIChanged)
     Q_PROPERTY(int vtMetalFramesInFlight MEMBER vtMetalFramesInFlight NOTIFY vtMetalFramesInFlightChanged)
 
     Q_INVOKABLE bool retranslate();
@@ -230,7 +229,6 @@ public:
     FramePacingMode framePacingMode;
     PresentMode presentMode;
     bool showPerformanceGraphs;
-    bool enableDeveloperUI;
     int vtMetalFramesInFlight;
 
 signals:
@@ -274,7 +272,6 @@ signals:
     void framePacingModeChanged();
     void presentModeChanged();
     void showPerformanceGraphsChanged();
-    void enableDeveloperUIChanged();
     void vtMetalFramesInFlightChanged();
 
 private:

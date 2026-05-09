@@ -29,6 +29,10 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
 
 void AutoUpdateChecker::start()
 {
+    // Disable for this custom version
+    qWarning() << "Skipping AutoUpdateChecker in this build";
+    return;
+
     if (!m_Nam) {
         Q_ASSERT(m_Nam);
         return;
