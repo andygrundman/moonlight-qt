@@ -64,7 +64,7 @@ bool Stats::ShouldUpdateDisplay(bool isVisible, char* output, size_t length)
 {
     bool shouldUpdate = false;
 
-    if (isVisible && ImGuiPlots::instance().isEnabled()) {
+    if (ImGuiPlots::instance().isEnabled()) {
         const double alpha = 0.1f;
         m_avgMbpsSmoothed = (1 - alpha) * m_avgMbpsSmoothed + alpha * m_bwTracker.GetAverageMbps();
         ImGuiPlots::instance().observeFloat(PLOT_BANDWIDTH, (float) m_avgMbpsSmoothed);
