@@ -38,9 +38,6 @@ void DevUISettings::InitFromPrefs(StreamingPreferences& prefs)
     cfg.useHeadTracking = prefs.spatialAudioConfig == StreamingPreferences::SAC_HEAD_TRACKED;
 #endif
 
-    // Everything is disabled if the Qt setting is disabled
-    m_Enabled.store(prefs.enableDeveloperUI);
-
     // These settings need to be primed from prefs
     FramePacer::instance().SetPacingMode(cfg.pacingMode);
     Stats::instance().SetShowGraphs(cfg.showGraphs);
@@ -97,7 +94,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     "DevUI: Pending change of presentMode from %d to %d",
                     old.presentMode,
                     config.presentMode);
-        // picked up by renderer (vt_metal notifyOverlayUpdated)
+        // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
     if (old.windowMode != config.windowMode) {
@@ -106,7 +103,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     old.windowMode,
                     config.windowMode);
 
-        // toggleFullscreen() will recreate the decoder which is running ImGui,
+        // toggleFullscreen() will recreate the decoder which is running us!
         // so use an SDL event instead
         SDL_Event event;
         event.type = SDL_USEREVENT;
@@ -150,7 +147,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     "DevUI: Pending change of showMetalHud from %d to %d",
                     old.showMetalHud,
                     config.showMetalHud);
-        // picked up by renderer (vt_metal notifyOverlayUpdated)
+        // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
     if (old.proMotionAllowsVRR != config.proMotionAllowsVRR) {
@@ -158,7 +155,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     "DevUI: Pending change of proMotionAllowsVRR from %d to %d",
                     old.proMotionAllowsVRR,
                     config.proMotionAllowsVRR);
-        // picked up by renderer (vt_metal notifyOverlayUpdated)
+        // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
     if (old.maxFramesInFlight != config.maxFramesInFlight) {
@@ -166,7 +163,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     "DevUI: Pending change of maxFramesInFlight from %d to %d",
                     old.maxFramesInFlight,
                     config.maxFramesInFlight);
-        // picked up by renderer (vt_metal notifyOverlayUpdated)
+        // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
     if (old.useEDR != config.useEDR) {
@@ -174,7 +171,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     "DevUI: Pending change of useEDR from %d to %d",
                     old.useEDR,
                     config.useEDR);
-        // picked up by renderer (vt_metal notifyOverlayUpdated)
+        // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
     if (old.useHeadTracking != config.useHeadTracking) {

@@ -57,7 +57,6 @@
 #define SER_FRAMEPACINGMODE "framePacingMode"
 #define SER_FRAMEPRESENTMODE "presentMode"
 #define SER_SHOWPERFORMANCEGRAPHS "showPerformanceGraphs"
-#define SER_ENABLEDEVELOPERUI "enableDeveloperUI"
 #define SER_VTMETALFRAMESINFLIGHT "vtMetalFramesInFlight"
 
 #define CURRENT_DEFAULT_VER 2
@@ -185,7 +184,6 @@ void StreamingPreferences::reload()
     presentMode = static_cast<PresentMode>(settings.value(SER_FRAMEPRESENTMODE,
                                                     static_cast<int>(PresentMode::PRESENT_AUTO)).toInt());
     showPerformanceGraphs = settings.value(SER_SHOWPERFORMANCEGRAPHS, false).toBool();
-    enableDeveloperUI = settings.value(SER_ENABLEDEVELOPERUI, false).toBool();
     vtMetalFramesInFlight = settings.value(SER_VTMETALFRAMESINFLIGHT, 3).toInt();
 
     // old enableVsync is now based on presentMode
@@ -390,7 +388,6 @@ void StreamingPreferences::save()
     settings.setValue(SER_FRAMEPACINGMODE, static_cast<int>(framePacingMode));
     settings.setValue(SER_FRAMEPRESENTMODE, static_cast<int>(presentMode));
     settings.setValue(SER_SHOWPERFORMANCEGRAPHS, showPerformanceGraphs);
-    settings.setValue(SER_ENABLEDEVELOPERUI, enableDeveloperUI);
     settings.setValue(SER_VTMETALFRAMESINFLIGHT, vtMetalFramesInFlight);
 }
 

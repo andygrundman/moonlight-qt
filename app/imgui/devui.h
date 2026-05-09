@@ -210,7 +210,7 @@ class DevUISettings
     mutable std::mutex m_Mutex;
     DevUIConfig m_Config;
     DevUIMetrics m_Metrics;
-    std::atomic<bool> m_Enabled {false};
+    std::atomic<bool> m_Enabled {true};
     std::atomic<bool> m_panelOpen {false};
     std::atomic<int> m_MetricsUpdateRateHz {15};
     std::atomic<bool> m_SettingsLoaded {false};  // set after settings have been loaded from Qt Prefs
