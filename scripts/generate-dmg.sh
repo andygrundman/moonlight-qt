@@ -72,9 +72,15 @@ echo Removing dSYM files from app bundle
 find $BUILD_FOLDER/app/Moonlight.app/ -name '*.dSYM' | xargs rm -rf
 
 if [ "$SIGNING_IDENTITY" != "" ]; then
+  if [ "$MOONLIGHT_PROVISION_PROFILE" == "" ]; then
+    fail "Please set MOONLIGHT_PROVISION_PROFILE to the path to your .provisionprofile"
+  fi
+  cp $SOURCE_ROOT/app/deploy/macos/spatial-audio.entitlements $BUILD_FOLDER/app/Moonlight.app/Contents/Resources/spatial-audio.entitlements
+  cp $MOONLIGHT_PROVISION_PROFILE $BUILD_FOLDER/app/Moonlight.app/Contents/embedded.provisionprofile
+
   echo Signing app bundle
-  codesign --force --deep --options runtime --timestamp \
-    --entitlements $SOURCE_ROOT/app/deploy/macos/spatial-audio.entitlements \
+  codesign --force --deep --force --verify --verbose --options runtime --timestamp \
+    --entitlements $BUILD_FOLDER/app/Moonlight.app/Contents/Resources/spatial-audio.entitlements \
     --sign "$SIGNING_IDENTITY" \
     $BUILD_FOLDER/app/Moonlight.app || fail "Signing failed!"
   echo "App signature:"
@@ -85,7 +91,7 @@ echo Creating DMG
 if [ "$SIGNING_IDENTITY" != "" ]; then
   create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --identity="$SIGNING_IDENTITY" --no-version-in-filename || fail "create-dmg failed!"
 else
-  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --no-version-in-filename
+  create-dmg $BUILD_FOLDER/app/Moonlight.app $INSTALLER_FOLDER --no-code-sign --no-version-in-filename
   case $? in
     0) ;;
     2) ;;
@@ -95,11 +101,11 @@ fi
 
 if [ "$NOTARY_KEYCHAIN_PROFILE" != "" ]; then
   echo Uploading to App Notary service
-  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg || fail "Notary submission failed"
+  xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary submission failed"
 
   echo Stapling notary ticket to DMG
-  xcrun stapler staple -v $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg || fail "Notary ticket stapling failed!"
+  xcrun stapler staple -v $INSTALLER_FOLDER/Moonlight.dmg || fail "Notary ticket stapling failed!"
 fi
 
-mv $INSTALLER_FOLDER/Moonlight\ $VERSION.dmg $INSTALLER_FOLDER/Moonlight-$VERSION.dmg
+mv $INSTALLER_FOLDER/Moonlight.dmg $INSTALLER_FOLDER/Moonlight-$VERSION.dmg
 echo Build successful

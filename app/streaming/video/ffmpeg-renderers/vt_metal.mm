@@ -251,7 +251,6 @@ public:
 #ifndef IMGUI_DISABLE
     virtual void ImGui_initBackend() override
     {
-        //ImGui_ImplOSX_Init((NSView *)m_MetalView);
         ImGui_ImplMetal_Init(m_MetalLayer.device);
         ImGui_ImplSDL2_InitForMetal(m_Window);
     }
@@ -260,7 +259,6 @@ public:
     {
         ImGui_ImplMetal_Shutdown();
         ImGui_ImplSDL2_Shutdown();
-        //ImGui_ImplOSX_Shutdown();
     }
 #endif
 
@@ -740,30 +738,24 @@ public:
         }
 
 #ifndef IMGUI_DISABLE
-        StreamingPreferences *prefs = StreamingPreferences::get();
-        bool showDevUI = prefs->enableDeveloperUI;
-        // zero ImGui overhead if you don't enable it
-        if (showDevUI) {
-            ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
-            ImGui_ImplSDL2_NewFrame();
-            //ImGui_ImplOSX_NewFrame((NSView *)m_MetalView);
-            ImGui::NewFrame();
+        ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
 
-            // Dockspace is cool but overkill
-            //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+        // Dockspace is cool but overkill
+        //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
 
-            bool outputIsPQ = m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm;
-            DevUIColors.InitColors(outputIsPQ);
-            Stats::instance().RenderGraphs();
+        bool outputIsPQ = m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm;
+        DevUIColors.InitColors(outputIsPQ);
 
-            if (showDevUI) DevUISettings::instance().Render();
-            GamepadMenu::instance().Render();
+        Stats::instance().RenderGraphs();
+        DevUISettings::instance().Render();
+        GamepadMenu::instance().Render();
 
-            ImGui::EndFrame();
-            ImGui::Render();
-            ImDrawData* draw_data = ImGui::GetDrawData();
-            ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
-        }
+        ImGui::EndFrame();
+        ImGui::Render();
+        ImDrawData* draw_data = ImGui::GetDrawData();
+        ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
 #endif
 
         [renderEncoder endEncoding];
@@ -1082,6 +1074,9 @@ public:
         // we have some time here to flush the cache, this should keep our memory usage low
         CVMetalTextureCacheFlush(m_TextureCache, 0);
 
+        // also check for updated DevUI settings
+        applyDevUIConfig();
+
         nextDrawable();
     }}
 
@@ -1291,75 +1286,6 @@ public:
         m_OverlayTextures[type] = nullptr;
         SDL_AtomicUnlock(&m_OverlayLock);
         [oldTexture release];
-
-    #ifndef IMGUI_DISABLE
-        // we may need to apply changes from DevUI, this function is the best place since it's only called once a second
-        auto cfg = DevUISettings::instance().GetConfig();
-        if (m_MaxFramesInFlight.load() != cfg.maxFramesInFlight) {
-            dispatch_sync(dispatch_get_main_queue(), ^{
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of maxFramesInFlight to %d", cfg.maxFramesInFlight);
-                m_MaxFramesInFlight.store(cfg.maxFramesInFlight);
-                m_MetalLayer.maximumDrawableCount = std::clamp(cfg.maxFramesInFlight, 2, 3);
-            });
-        }
-
-        if (m_ProMotionAllowsVRR != cfg.proMotionAllowsVRR) {
-            m_ProMotionAllowsVRR = cfg.proMotionAllowsVRR;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of proMotionAllowsVRR to %d", m_ProMotionAllowsVRR);
-            refreshWindowMetadata();
-        }
-
-        if (m_UsePTSForVRR != cfg.usePTSForVRR) {
-            m_UsePTSForVRR = cfg.usePTSForVRR;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of usePTSForVRR to %d", m_UsePTSForVRR);
-        }
-
-        if (m_RequestedPresentMode != cfg.presentMode) {
-            m_RequestedPresentMode = cfg.presentMode;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of presentMode to %d", m_RequestedPresentMode);
-
-            // change vsync if necessary
-            bool vsyncEnabled = YES;
-            if (m_RequestedPresentMode == StreamingPreferences::PRESENT_NO_VSYNC) {
-                vsyncEnabled = NO;
-            }
-            if (m_MetalLayer.displaySyncEnabled != vsyncEnabled) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of vsync to %d", vsyncEnabled);
-                    m_MetalLayer.displaySyncEnabled = vsyncEnabled;
-                    m_IsVsync.store(vsyncEnabled);
-                });
-            }
-        }
-
-        if (m_UseEDR != cfg.useEDR) {
-            m_UseEDR = cfg.useEDR;
-            m_HdrMetadataChanged = true;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of useEDR to %d", m_UseEDR);
-        }
-
-        if (const char* env_capture = std::getenv("MTL_CAPTURE_ENABLED");
-            env_capture && std::strcmp(env_capture, "1") == 0)
-        {
-            static bool captureGPUTrace = cfg.captureGPUTrace;
-            if (captureGPUTrace != cfg.captureGPUTrace) {
-                captureGPUTrace = cfg.captureGPUTrace;
-                if (!m_IsGPUCapturing) {
-                    startGPUCapture();
-                }
-                else {
-                    stopGPUCapture();
-                }
-            }
-        }
-
-        if (m_ShowMetalHUD != cfg.showMetalHud) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of showMetalHud to %d", cfg.showMetalHud);
-            m_ShowMetalHUD = cfg.showMetalHud;
-
-            showMetalHud(m_ShowMetalHUD);
-        }
-    #endif
 
         // If the overlay is disabled, we're done
         if (!overlayEnabled) {
@@ -1656,6 +1582,85 @@ public:
             m_CommandBuffer[m_CurrentBuffer].label = @"vt_metal command buffer";
         }
         return m_CommandBuffer[m_CurrentBuffer];
+    }
+
+    void applyDevUIConfig()
+    {
+    #ifndef IMGUI_DISABLE
+        // we may need to apply changes from DevUI, but only check once per second
+        uint64_t now = QpcNow();
+        static uint64_t lastDevUI = 0;
+        if (lastDevUI > 0 && QpcToMs(now - lastDevUI) < 1000.0) {
+            return;
+        }
+        lastDevUI = now;
+
+        auto cfg = DevUISettings::instance().GetConfig();
+        if (m_MaxFramesInFlight.load() != cfg.maxFramesInFlight) {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of maxFramesInFlight to %d", cfg.maxFramesInFlight);
+                m_MaxFramesInFlight.store(cfg.maxFramesInFlight);
+                m_MetalLayer.maximumDrawableCount = std::clamp(cfg.maxFramesInFlight, 2, 3);
+            });
+        }
+
+        if (m_ProMotionAllowsVRR != cfg.proMotionAllowsVRR) {
+            m_ProMotionAllowsVRR = cfg.proMotionAllowsVRR;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of proMotionAllowsVRR to %d", m_ProMotionAllowsVRR);
+            refreshWindowMetadata();
+        }
+
+        if (m_UsePTSForVRR != cfg.usePTSForVRR) {
+            m_UsePTSForVRR = cfg.usePTSForVRR;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of usePTSForVRR to %d", m_UsePTSForVRR);
+        }
+
+        if (m_RequestedPresentMode != cfg.presentMode) {
+            m_RequestedPresentMode = cfg.presentMode;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of presentMode to %d", m_RequestedPresentMode);
+
+            // change vsync if necessary
+            bool vsyncEnabled = YES;
+            if (m_RequestedPresentMode == StreamingPreferences::PRESENT_NO_VSYNC) {
+                vsyncEnabled = NO;
+            }
+            if (m_MetalLayer.displaySyncEnabled != vsyncEnabled) {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of vsync to %d", vsyncEnabled);
+                    m_MetalLayer.displaySyncEnabled = vsyncEnabled;
+                    m_IsVsync.store(vsyncEnabled);
+                });
+            }
+        }
+
+        if (m_UseEDR != cfg.useEDR) {
+            m_UseEDR = cfg.useEDR;
+            m_HdrMetadataChanged = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of useEDR to %d", m_UseEDR);
+        }
+
+        if (const char* env_capture = std::getenv("MTL_CAPTURE_ENABLED");
+            env_capture && std::strcmp(env_capture, "1") == 0)
+        {
+            static bool captureGPUTrace = cfg.captureGPUTrace;
+            if (captureGPUTrace != cfg.captureGPUTrace) {
+                captureGPUTrace = cfg.captureGPUTrace;
+                if (!m_IsGPUCapturing) {
+                    startGPUCapture();
+                }
+                else {
+                    stopGPUCapture();
+                }
+            }
+        }
+
+        if (m_ShowMetalHUD != cfg.showMetalHud) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of showMetalHud to %d", cfg.showMetalHud);
+            m_ShowMetalHUD = cfg.showMetalHud;
+
+            showMetalHud(m_ShowMetalHUD);
+        }
+    #endif
     }
 
 private:
