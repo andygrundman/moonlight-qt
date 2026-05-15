@@ -612,7 +612,7 @@ public:
         return texture;
     }
 
-    bool createTexturesFromFrame(AVFrame* frame, std::array<CVMetalTextureRef, MAX_VIDEO_PLANES>& cvMetalTextures)
+    bool createTexturesFromFrame(AVFrame* frame)
     {
         SDL_assert(frame->format == AV_PIX_FMT_VIDEOTOOLBOX);
 
@@ -645,16 +645,16 @@ public:
                 return false;
             }
 
-            if (cvMetalTextures[i] != nil) {
+            if (m_CVMetalTextures[m_CurrentBuffer][i] != nil) {
                 // release previous texture
-                CFRelease(cvMetalTextures[i]);
+                CFRelease(m_CVMetalTextures[m_CurrentBuffer][i]);
             }
 
             CVReturn err = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, m_TextureCache, pixBuf, nullptr, fmt,
                                                                      CVPixelBufferGetWidthOfPlane(pixBuf, i),
                                                                      CVPixelBufferGetHeightOfPlane(pixBuf, i),
                                                                      i,
-                                                                     &cvMetalTextures[i]);
+                                                                     &m_CVMetalTextures[m_CurrentBuffer][i]);
             if (err != kCVReturnSuccess) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "CVMetalTextureCacheCreateTextureFromImage() failed: %d",
@@ -669,17 +669,12 @@ public:
     bool testRenderFrame(AVFrame *frame) override
     { @autoreleasepool {
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-            std::array<CVMetalTextureRef, MAX_VIDEO_PLANES> cvMetalTextures;
             size_t planes = getFramePlaneCount(frame);
             SDL_assert(planes <= MAX_VIDEO_PLANES);
 
             // Test that we can actually create Metal textures from the CVPixelBufferRef
-            if (!createTexturesFromFrame(frame, cvMetalTextures)) {
+            if (!createTexturesFromFrame(frame)) {
                 return false;
-            }
-
-            for (size_t i = 0; i < planes; i++) {
-                CFRelease(cvMetalTextures[i]);
             }
         }
         else {
@@ -696,7 +691,7 @@ public:
         SDL_assert(planes <= MAX_VIDEO_PLANES);
 
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-            if (!createTexturesFromFrame(frame, m_CVMetalTextures[m_CurrentBuffer])) {
+            if (!createTexturesFromFrame(frame)) {
                 return;
             }
         }
