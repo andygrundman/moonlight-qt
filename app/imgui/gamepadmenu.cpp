@@ -32,7 +32,6 @@ void GamepadMenu::Render()
 
     // Setup 2 global ImGui shortcuts (key chord handlers) for bringing up the quick menu:
     // Select + Start on gamepad, or Ctrl-Shift-Alt-Space
-    bool usingGamepad = false;
     bool panelOpen = m_Visible.load();
     if (ImGui::Shortcut(ImGuiKey_Space | ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiMod_Shift, ImGuiInputFlags_RouteGlobal)) {
         panelOpen = !panelOpen;
@@ -40,7 +39,6 @@ void GamepadMenu::Render()
         Session::get()->getInputHandler()->raiseAllKeys();
     }
     if (ImGui::Shortcut(ImGuiKey_GamepadStart | ImGuiKey_GamepadBack, ImGuiInputFlags_RouteGlobal)) {
-        usingGamepad = true;
         panelOpen = !panelOpen;
 
         // Clear buttons down on all gamepads so we aren't holding the buttons while in the menu
@@ -58,7 +56,7 @@ void GamepadMenu::Render()
         ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
         ImGui::SetNextWindowSize(ImVec2(std::max(vp->WorkSize.x / 3.5f, 320.0f), 0.0f));
-        ImGui::SetNextWindowBgAlpha(0.92f);
+        //ImGui::SetNextWindowBgAlpha(0.92f);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 12.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(0.0f, 2.0f));
@@ -149,7 +147,6 @@ void GamepadMenu::Render()
             }
 
             // Render items, highlighting the currently selected one
-            ImGuiStyle& outerStyle = ImGui::GetStyle();
             for (int i = 0; i < itemCount; i++) {
                 const auto& item = items[i];
                 ImGui::PushID(i);
