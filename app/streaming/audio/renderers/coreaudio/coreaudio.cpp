@@ -115,7 +115,7 @@ void CoreAudioRenderer::statsTrackRender(uint64_t startTimeUs, const AudioTimeSt
     m_LastNumFrames = inNumberFrames;
 
     // add this to our decoderTime
-    uint64_t decodeTimeUs = LiGetMicroseconds() - startTimeUs;
+    //uint64_t decodeTimeUs = LiGetMicroseconds() - startTimeUs;
     //m_ActiveWndAudioStats.decodeDurationUs += decodeTimeUs;
 
     // We now have decodeDurationUs covering 2 time periods:
