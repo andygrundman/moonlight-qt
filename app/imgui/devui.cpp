@@ -174,6 +174,30 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
         // picked up by renderer (vt_metal applyDevUIConfig)
     }
 
+    if (old.referenceWhite != config.referenceWhite) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+            "DevUI: Pending change of referenceWhite from %.2f to %.2f",
+            old.referenceWhite,
+            config.referenceWhite);
+        // picked up by renderer (vt_metal applyDevUIConfig)
+    }
+
+    if (old.minNits != config.minNits) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+            "DevUI: Pending change of minNits from %.2f to %.2f",
+            old.minNits,
+            config.minNits);
+        // picked up by renderer (vt_metal applyDevUIConfig)
+    }
+
+    if (old.maxNits != config.maxNits) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+            "DevUI: Pending change of maxNits from %.2f to %.2f",
+            old.maxNits,
+            config.maxNits);
+        // picked up by renderer (vt_metal applyDevUIConfig)
+    }
+
     if (old.useHeadTracking != config.useHeadTracking) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "DevUI: Pending change of head tracking from %d to %d",
@@ -340,6 +364,11 @@ void DevUISettings::Render()
 
     // Panel
     if (panelOpen) {
+        // allow keyboard in advanced panel for things like entering numbers
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        SDL_StartTextInput();
+
         ImGui::SetNextWindowPos(ImVec2(panelX, panelY), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(panelWidth, panelHeight), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(0.70f);
@@ -435,7 +464,7 @@ void DevUISettings::Render()
             // configChanged |= ImGui::SliderInt("Metrics update rate", &cfg.metricsUpdateRate, 1, 120);
 
             configChanged |= ImGui::Checkbox("Show Stats", &cfg.showStats);
-
+            ImGui::SameLine();
             configChanged |= ImGui::Checkbox("Show Performance Graphs", &cfg.showGraphs);
 
     #ifdef __APPLE__
@@ -451,6 +480,7 @@ void DevUISettings::Render()
             // Run Moonlight with MTL_CAPTURE_ENABLED=1 to enable this option
             if (const char* env_capture = std::getenv("MTL_CAPTURE_ENABLED");
                 env_capture && std::strcmp(env_capture, "1") == 0) {
+                ImGui::SameLine();
                 configChanged |= ImGui::Checkbox("GPU Capture", &cfg.captureGPUTrace);
                 ImGui::SameLine();
                 HelpMarker(
@@ -459,9 +489,6 @@ void DevUISettings::Render()
                     "trace using Xcode."
                 );
             }
-
-                // needs more work
-                // configChanged |= ImGui::Checkbox("Tonemap HDR->SDR (experimental)", &cfg.useEDR);
     #endif
 
             static bool show_demo_window = false;
@@ -470,11 +497,36 @@ void DevUISettings::Render()
                 ImGui::ShowDemoWindow(&show_demo_window);
             }
 
+        #ifdef __APPLE__
+            ImGui::SeparatorText("HDR");
+            ImGui::Text("EDR headroom: %.1fx SDR", metrics.currentEDR);
+
+            ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+            if (cfg.isReferenceModeDisplay) ImGui::BeginDisabled(); // reference mode uses 100 nits
+            configChanged |= ImGui::SliderFloat("Reference/SDR White", &cfg.referenceWhite, 100.0f, 203.0f, "%.1f nits");
+            ImGui::SameLine();
+            HelpMarker("This value represents SDR peak white. If your display is in reference mode (such as MacBook Pro's 'HDR Video' preset), SDR peak is 100 nits. In other modes, 203 nits is the default.");
+            if (cfg.isReferenceModeDisplay) ImGui::EndDisabled();
+
+            ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+            configChanged |= ImGui::SliderFloat("Min Luminance", &cfg.minNits, 0.0f, 6.5535f, "%.4f nits");
+
+            ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+            configChanged |= ImGui::SliderFloat("Max Luminance", &cfg.maxNits, 1.0f, 10000.0f, "%.2f nits");
+
+            configChanged |= ImGui::Checkbox("Enable EDR tone-mapping (experimental)", &cfg.useEDR);
+            ImGui::SameLine();
+            HelpMarker(
+                "macOS will render HDR content according to your current display brightness and display preset. HDR will be tone-mapped to SDR when viewed on a non-HDR display.\n\n"
+                "If disabled, HDR is rendered at its native brightness.");
+        #endif
+
+            ImGui::SeparatorText("Audio");
+
             if (Session::get()->getAudioRenderer() != nullptr) {
                 Session::get()->getAudioRenderer()->updateMetrics();
             }
 
-            ImGui::SeparatorText("Audio");
             ImGui::Text("Input stream: %s-channel Opus low-delay @ 48 kHz",
                 metrics.opusChannelCount == 6 ? "5.1" : metrics.opusChannelCount == 8 ? "7.1" : "2");
             ImGui::Text("Output device: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
@@ -638,6 +690,12 @@ void DevUISettings::Render()
         }
         ImGui::End();
     }
+    else {
+        // no keyboard when panel is closed
+        ImGuiIO& io = ImGui::GetIO();
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+        SDL_StopTextInput();
+    }
 
     if (configChanged) {
         ChangeAndApplyConfig(cfg);
@@ -756,26 +814,32 @@ void DevUISettings::DrawFrameTimingBar(const char* label,
 #define RGBGetGValue(rgb) ((rgb >> 8) & 0x000000FF)
 #define RGBGetRValue(rgb) ((rgb >> 16) & 0x000000FF)
 
-void DevColors::InitColors(bool outputIsPQ)
+void DevColors::InitColors(DisplayOutputFormat outputFormat)
 {
     // ImGui colors are much too bright when output in a PQ colorspace
     // This code from MangoHud converts them from sRGB to PQ
-    auto convert = [outputIsPQ](unsigned color, float alpha = 1.0f) -> ImVec4 {
+    auto convert = [outputFormat](unsigned color, float alpha = 1.0f) -> ImVec4 {
         ImVec4 fc = ImGui::ColorConvertU32ToFloat4(
             IM_COL32(RGBGetRValue(color), RGBGetGValue(color), RGBGetBValue(color), 255)
         );
         fc.w = alpha;
-        if (outputIsPQ) {
+        if (outputFormat == OUTPUT_IS_PQ) {
             fc = SRGBToLinear(fc);
             return LinearToPQ(fc);
+        }
+        else if (outputFormat == OUTPUT_IS_LINEAR) {
+            return SRGBToLinear(fc);
         }
         return fc;
     };
 
-    auto convert4 = [outputIsPQ](ImVec4 fc) -> ImVec4 {
-        if (outputIsPQ) {
+    auto convert4 = [outputFormat](ImVec4 fc) -> ImVec4 {
+        if (outputFormat == OUTPUT_IS_PQ) {
             fc = SRGBToLinear(fc);
             return LinearToPQ(fc);
+        }
+        else if (outputFormat == OUTPUT_IS_LINEAR) {
+            return SRGBToLinear(fc);
         }
         return fc;
     };
@@ -784,8 +848,7 @@ void DevColors::InitColors(bool outputIsPQ)
     // This only deals with dimming the white text and green lines.
     ImGuiStyle& style = ImGui::GetStyle();
     //style.Colors[ImGuiCol_PlotLines]        = convert(0x00FF00);
-    style.Colors[ImGuiCol_WindowBg]         = convert(0x000000, 0.50f);
-    style.Colors[ImGuiCol_Text]             = convert(0xFFFFFF);
+    //style.Colors[ImGuiCol_WindowBg]         = convert(0x000000, 0.50f);
     style.Colors[ImGuiCol_Button]           = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.40f));
     style.Colors[ImGuiCol_ButtonHovered]    = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
     style.Colors[ImGuiCol_ButtonActive]     = convert4(ImVec4(0.06f, 0.53f, 0.98f, 1.00f));
@@ -794,42 +857,42 @@ void DevColors::InitColors(bool outputIsPQ)
 
     style.AntiAliasedLines = false;
 
-    // style.Colors[ImGuiCol_Text]                   = convert4(ImVec4(1.00f, 1.00f, 1.00f, 1.00f));
-    // style.Colors[ImGuiCol_TextDisabled]           = convert4(ImVec4(0.50f, 0.50f, 0.50f, 1.00f));
-    // style.Colors[ImGuiCol_WindowBg]               = convert4(ImVec4(0.06f, 0.06f, 0.06f, 0.94f));
-    // style.Colors[ImGuiCol_ChildBg]                = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
-    // style.Colors[ImGuiCol_PopupBg]                = convert4(ImVec4(0.08f, 0.08f, 0.08f, 0.94f));
-    // style.Colors[ImGuiCol_Border]                 = convert4(ImVec4(0.43f, 0.43f, 0.50f, 0.50f));
-    // style.Colors[ImGuiCol_BorderShadow]           = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
-    // style.Colors[ImGuiCol_FrameBg]                = convert4(ImVec4(0.16f, 0.29f, 0.48f, 0.54f));
-    // style.Colors[ImGuiCol_FrameBgHovered]         = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.40f));
-    // style.Colors[ImGuiCol_FrameBgActive]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.67f));
-    // style.Colors[ImGuiCol_TitleBg]                = convert4(ImVec4(0.04f, 0.04f, 0.04f, 1.00f));
-    // style.Colors[ImGuiCol_TitleBgActive]          = convert4(ImVec4(0.16f, 0.29f, 0.48f, 1.00f));
-    // style.Colors[ImGuiCol_TitleBgCollapsed]       = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.51f));
+    style.Colors[ImGuiCol_Text]                   = convert4(ImVec4(1.00f, 1.00f, 1.00f, 1.00f));
+    style.Colors[ImGuiCol_TextDisabled]           = convert4(ImVec4(0.50f, 0.50f, 0.50f, 1.00f));
+    style.Colors[ImGuiCol_WindowBg]               = convert4(ImVec4(0.06f, 0.06f, 0.06f, 0.94f));
+    style.Colors[ImGuiCol_ChildBg]                = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
+    style.Colors[ImGuiCol_PopupBg]                = convert4(ImVec4(0.08f, 0.08f, 0.08f, 0.94f));
+    style.Colors[ImGuiCol_Border]                 = convert4(ImVec4(0.43f, 0.43f, 0.50f, 0.50f));
+    style.Colors[ImGuiCol_BorderShadow]           = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
+    style.Colors[ImGuiCol_FrameBg]                = convert4(ImVec4(0.16f, 0.29f, 0.48f, 0.54f));
+    style.Colors[ImGuiCol_FrameBgHovered]         = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.40f));
+    style.Colors[ImGuiCol_FrameBgActive]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.67f));
+    style.Colors[ImGuiCol_TitleBg]                = convert4(ImVec4(0.04f, 0.04f, 0.04f, 1.00f));
+    style.Colors[ImGuiCol_TitleBgActive]          = convert4(ImVec4(0.16f, 0.29f, 0.48f, 1.00f));
+    style.Colors[ImGuiCol_TitleBgCollapsed]       = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.51f));
     // style.Colors[ImGuiCol_MenuBarBg]              = convert4(ImVec4(0.14f, 0.14f, 0.14f, 1.00f));
     // style.Colors[ImGuiCol_ScrollbarBg]            = convert4(ImVec4(0.02f, 0.02f, 0.02f, 0.53f));
     // style.Colors[ImGuiCol_ScrollbarGrab]          = convert4(ImVec4(0.31f, 0.31f, 0.31f, 1.00f));
     // style.Colors[ImGuiCol_ScrollbarGrabHovered]   = convert4(ImVec4(0.41f, 0.41f, 0.41f, 1.00f));
     // style.Colors[ImGuiCol_ScrollbarGrabActive]    = convert4(ImVec4(0.51f, 0.51f, 0.51f, 1.00f));
-    // style.Colors[ImGuiCol_CheckMark]              = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
-    // style.Colors[ImGuiCol_SliderGrab]             = convert4(ImVec4(0.24f, 0.52f, 0.88f, 1.00f));
-    // style.Colors[ImGuiCol_SliderGrabActive]       = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
-    // style.Colors[ImGuiCol_Button]                 = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.40f));
-    // style.Colors[ImGuiCol_ButtonHovered]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
-    // style.Colors[ImGuiCol_ButtonActive]           = convert4(ImVec4(0.06f, 0.53f, 0.98f, 1.00f));
-    // style.Colors[ImGuiCol_Header]                 = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.31f));
-    // style.Colors[ImGuiCol_HeaderHovered]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.80f));
-    // style.Colors[ImGuiCol_HeaderActive]           = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
-    // style.Colors[ImGuiCol_SeparatorHovered]       = convert4(ImVec4(0.10f, 0.40f, 0.75f, 0.78f));
-    // style.Colors[ImGuiCol_SeparatorActive]        = convert4(ImVec4(0.10f, 0.40f, 0.75f, 1.00f));
+    style.Colors[ImGuiCol_CheckMark]              = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
+    style.Colors[ImGuiCol_SliderGrab]             = convert4(ImVec4(0.24f, 0.52f, 0.88f, 1.00f));
+    style.Colors[ImGuiCol_SliderGrabActive]       = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
+    style.Colors[ImGuiCol_Button]                 = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.40f));
+    style.Colors[ImGuiCol_ButtonHovered]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
+    style.Colors[ImGuiCol_ButtonActive]           = convert4(ImVec4(0.06f, 0.53f, 0.98f, 1.00f));
+    style.Colors[ImGuiCol_Header]                 = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.31f));
+    style.Colors[ImGuiCol_HeaderHovered]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.80f));
+    style.Colors[ImGuiCol_HeaderActive]           = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
+    style.Colors[ImGuiCol_SeparatorHovered]       = convert4(ImVec4(0.10f, 0.40f, 0.75f, 0.78f));
+    style.Colors[ImGuiCol_SeparatorActive]        = convert4(ImVec4(0.10f, 0.40f, 0.75f, 1.00f));
     // style.Colors[ImGuiCol_ResizeGrip]             = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.20f));
     // style.Colors[ImGuiCol_ResizeGripHovered]      = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.67f));
     // style.Colors[ImGuiCol_ResizeGripActive]       = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.95f));
     // style.Colors[ImGuiCol_TabDimmedSelectedOverline] = convert4(ImVec4(0.50f, 0.50f, 0.50f, 0.00f));
     // style.Colors[ImGuiCol_DockingEmptyBg]         = convert4(ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
-    // style.Colors[ImGuiCol_PlotLines]              = convert4(ImVec4(0.61f, 0.61f, 0.61f, 1.00f));
-    // style.Colors[ImGuiCol_PlotLinesHovered]       = convert4(ImVec4(1.00f, 0.43f, 0.35f, 1.00f));
+    style.Colors[ImGuiCol_PlotLines]              = convert4(ImVec4(0.61f, 0.61f, 0.61f, 1.00f));
+    style.Colors[ImGuiCol_PlotLinesHovered]       = convert4(ImVec4(1.00f, 0.43f, 0.35f, 1.00f));
     // style.Colors[ImGuiCol_PlotHistogram]          = convert4(ImVec4(0.90f, 0.70f, 0.00f, 1.00f));
     // style.Colors[ImGuiCol_PlotHistogramHovered]   = convert4(ImVec4(1.00f, 0.60f, 0.00f, 1.00f));
     // style.Colors[ImGuiCol_TableHeaderBg]          = convert4(ImVec4(0.19f, 0.19f, 0.20f, 1.00f));
