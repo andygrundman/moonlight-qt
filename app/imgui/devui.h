@@ -12,6 +12,12 @@
 
 using Clock = std::chrono::steady_clock;
 
+enum DisplayOutputFormat {
+    OUTPUT_IS_SDR = 0,
+    OUTPUT_IS_PQ = 1,
+    OUTPUT_IS_LINEAR = 2
+};
+
 struct RunningStat {
     uint64_t count = 0;
     float sum = 0.0;
@@ -74,6 +80,10 @@ struct DevUIConfig {
     bool proMotionAllowsVRR = false;
     bool captureGPUTrace = false;
     bool useEDR = false;
+    bool isReferenceModeDisplay = false;
+    float referenceWhite = 203.0f;
+    float minNits = 0.0f;
+    float maxNits = 0.0f;
     int spatialAudio = StreamingPreferences::SAC_DISABLED;
     bool useHeadTracking = false;
 #endif
@@ -107,6 +117,16 @@ struct DevUIMetrics {
     double presentAccuracyMs = 0.0;
     float streamFps = 0.0;
     float displayHz = 0.0;
+
+#ifdef __APPLE__
+    // EDR
+    float currentEDR = 1.0f;
+    float maxPotentialEDR = 1.0f;
+    float maxReferenceEDR = 1.0f;
+    float referenceWhite = 203.0f;
+    float minNits = 0.0f;
+    float maxNits = 0.0f;
+#endif
 
     // audio
     char audioOutputDeviceName[32] = {};
@@ -220,7 +240,7 @@ class DevUISettings
 class DevColors
 {
   public:
-    void InitColors(bool outputIsPQ);
+    void InitColors(DisplayOutputFormat outputFormat);
 
     struct ui_colors {
         ImVec4 preWait, render, waitPresent, waitEnd;

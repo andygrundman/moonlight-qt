@@ -3,7 +3,6 @@
 #include "imgui.h"
 #include "imgui/devui.h"
 #include "imgui/IconsFontAwesome7.h"
-#include "imgui/style.h"
 #include "streaming/session.h"
 
 GamepadMenu& GamepadMenu::instance()

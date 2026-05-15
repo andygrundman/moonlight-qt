@@ -53,6 +53,7 @@
 #define SER_CAPTURESYSKEYS "capturesyskeys"
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
+#define SER_AUDIO_RENDERER "audioRenderer"
 #define SER_RENDERER "renderer"
 #define SER_FRAMEPACINGMODE "framePacingMode"
 #define SER_FRAMEPRESENTMODE "presentMode"
@@ -177,6 +178,8 @@ void StreamingPreferences::reload()
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
+    audioRenderer = static_cast<AudioRenderer>(settings.value(SER_AUDIO_RENDERER,
+                                                    static_cast<int>(AudioRenderer::AUDIO_RENDERER_COREAUDIO)).toInt());
     renderer = static_cast<Renderer>(settings.value(SER_RENDERER,
                                                     static_cast<int>(Renderer::RENDERER_VT_METAL)).toInt());
     framePacingMode = static_cast<FramePacingMode>(settings.value(SER_FRAMEPACINGMODE,
@@ -384,6 +387,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_SWAPFACEBUTTONS, swapFaceButtons);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
+    settings.setValue(SER_AUDIO_RENDERER, static_cast<int>(audioRenderer));
     settings.setValue(SER_RENDERER, static_cast<int>(renderer));
     settings.setValue(SER_FRAMEPACINGMODE, static_cast<int>(framePacingMode));
     settings.setValue(SER_FRAMEPRESENTMODE, static_cast<int>(presentMode));

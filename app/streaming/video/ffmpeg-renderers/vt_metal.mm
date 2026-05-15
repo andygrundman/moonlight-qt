@@ -68,6 +68,12 @@ struct PresentedFrameInfo
     CFTimeInterval vsyncTimestamp;
     CFTimeInterval vsyncDeadline;
     bool late;
+
+    float currentEDR;
+    float maxPotentialEDR;
+    float maxReferenceEDR;
+    float referenceWhite;
+    float maxNits;
 };
 
 // store any data used by present callbacks in something other than the VTMetalRenderer object.
@@ -132,10 +138,12 @@ public:
           m_ProMotionAllowsVRR(false),
           m_UsePTSForVRR(false),
           m_UseEDR(false),
+          m_NeedNewDrawable(false),
           m_ShowMetalHUD(false),
           m_MaxPotentialEDR(1.0),
-          m_CurrentEDR(1.0),
+          m_CurrentEDR{1.0},
           m_MaxReferenceEDR(1.0),
+          m_ReferenceWhite(203.0f), // 100.0f on displays in reference mode
           m_RequestedPresentMode(StreamingPreferences::PRESENT_AUTO),
           m_MinRefreshInterval(1.0f / 60),
           m_MaxRefreshInterval(1.0f / 60),
@@ -425,8 +433,8 @@ public:
         paramBuffer.chromaOffset = simd_make_half2(chromaOffset[0],
                                                    chromaOffset[1]);
 
-        if (m_UseEDR && frame->color_trc == AVCOL_TRC_SMPTE2084 && m_MasteringDisplayColorVolume != nullptr) {
-            // Set the EDR metadata for HDR10 to enable OS tonemapping
+        if (m_UseEDR && frame->color_trc == AVCOL_TRC_SMPTE2084) {
+            // EDR requires a linear floating-point pixel format
             m_MetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
 
             // change to linear colorspace
@@ -448,12 +456,33 @@ public:
             newColorSpace = CGColorSpaceCreateWithName(name);
             m_MetalLayer.colorspace = newColorSpace;
 
-            m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
-                                                                       contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
-                                                                opticalOutputScale:203.0];
+            // MDCV contains min/max values from the host
+            // The user can override this if they want to
+            if (m_OverrideNits) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "EDR using user-selected min/max nits %.4f/%.2f, referenceWhite %.2f",
+                            m_MinNits, m_MaxNits, m_ReferenceWhite);
+                m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:m_MinNits
+                                                                           maxLuminance:m_MaxNits
+                                                                     opticalOutputScale:m_ReferenceWhite];
+            }
+            else if (m_MasteringDisplayColorVolume != nullptr) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "EDR using MasteringDisplayColorVolume from host: min/max nits %.4f/%.2f, referenceWhite %.2f",
+                            m_MinNits, m_MaxNits, m_ReferenceWhite);
+                m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
+                                                                           contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
+                                                                    opticalOutputScale:m_ReferenceWhite];
+            }
         }
         else {
             m_MetalLayer.EDRMetadata = nullptr;
+        }
+
+        // Get a new drawable if the pixel format was changed
+        if (m_NeedNewDrawable) {
+            nextDrawable(true); // force a new drawable
+            m_NeedNewDrawable = false;
         }
 
         paramBuffer.bitnessScaleFactor = getBitnessScaleFactor(frame);
@@ -480,7 +509,7 @@ public:
 
         if (m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float) {
             // Linear shader with tonemapping
-            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:@"ps_draw_linear"] autorelease];
+            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:planes == 2 ? @"ps_draw_linear" : @"ps_draw_linear_triplanar"] autorelease];
         }
         else {
             pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:planes == 2 ? @"ps_draw_biplanar" : @"ps_draw_triplanar"] autorelease];
@@ -688,8 +717,14 @@ public:
                 [renderEncoder setFragmentTexture:mapPlaneForSoftwareFrame(frame, i) atIndex:i];
             }
         }
-        [renderEncoder setFragmentBuffer:m_CscParamsBuffer offset:0 atIndex:0];
         [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
+        if (m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float) {
+            float currentEDR = m_CurrentEDR.load();
+            [renderEncoder setFragmentBytes:&currentEDR length:sizeof(float) atIndex:1];
+            [renderEncoder setFragmentBytes:&m_ReferenceWhite length:sizeof(float) atIndex:2];
+            [renderEncoder setFragmentBytes:&m_MaxNits length:sizeof(float) atIndex:3];
+        }
+        [renderEncoder setFragmentBuffer:m_CscParamsBuffer offset:0 atIndex:0];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
         // Now draw any overlays that are enabled
@@ -745,8 +780,11 @@ public:
         // Dockspace is cool but overkill
         //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
 
-        bool outputIsPQ = m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm;
-        DevUIColors.InitColors(outputIsPQ);
+        DisplayOutputFormat outputFormat =
+              m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm ? OUTPUT_IS_PQ
+            : m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float ? OUTPUT_IS_LINEAR
+            : OUTPUT_IS_SDR;
+        DevUIColors.InitColors(outputFormat);
 
         Stats::instance().RenderGraphs();
         DevUISettings::instance().Render();
@@ -765,7 +803,7 @@ public:
     virtual void presentFrame(AVFrame* frame, uint64_t targetQpc) override
     { @autoreleasepool {
         auto commandBuffer = getCommandBuffer();
-        auto drawable = nextDrawable();
+        auto drawable = nextDrawable(); // get cached drawable
 
         // We need to get the previous frame's pts that was attached by FrameCadence, in case that frame was dropped
         int64_t prevPts = 0;
@@ -864,6 +902,13 @@ public:
                     // alternate check for lateness
                     metrics.displayLockedMissed++;
                 }
+                if (pfi.currentEDR > 1.0) {
+                    metrics.currentEDR = pfi.currentEDR;
+                    metrics.maxPotentialEDR = pfi.maxPotentialEDR;
+                    metrics.maxReferenceEDR = pfi.maxReferenceEDR;
+                    metrics.referenceWhite = pfi.referenceWhite;
+                    metrics.maxNits = pfi.maxNits;
+                }
             });
         #endif
         };
@@ -879,6 +924,14 @@ public:
             .vsyncTimestamp = vsyncTimestamp,
             .vsyncDeadline  = vsyncDeadline
         };
+
+        if (m_UseEDR) {
+            pfi.currentEDR = m_CurrentEDR.load();
+            pfi.maxPotentialEDR = m_MaxPotentialEDR;
+            pfi.maxReferenceEDR = m_MaxReferenceEDR;
+            pfi.referenceWhite = m_ReferenceWhite;
+            pfi.maxNits = m_MaxNits;
+        }
 
         // prefer the user's choice from DevUI, or use auto-detection
         pfi.presentMode = m_RequestedPresentMode;
@@ -1063,21 +1116,16 @@ public:
         [m_CommandBuffer[m_CurrentBuffer] release];
         m_CommandBuffer[m_CurrentBuffer] = nil;
 
-        // release the drawable and obtain the next one
-        // We expect this to block, this works better for
-        // frame pacing than a semaphore according to RetroArch
-        if (m_Drawable) {
-            [m_Drawable release];
-            m_Drawable = nil;
-        }
-
         // we have some time here to flush the cache, this should keep our memory usage low
         CVMetalTextureCacheFlush(m_TextureCache, 0);
 
         // also check for updated DevUI settings
         applyDevUIConfig();
 
-        nextDrawable();
+        // Force a new drawable for the next frame.
+        // We expect this to block, this works better for
+        // frame pacing than a semaphore according to RetroArch
+        nextDrawable(true);
     }}
 
     // Caller frees frame after we return
@@ -1458,13 +1506,7 @@ public:
                     [screen.localizedName UTF8String], 1.0f / m_MinRefreshInterval);
             }
 
-            // EDR
-            m_MaxPotentialEDR = screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
-            m_CurrentEDR      = screen.maximumExtendedDynamicRangeColorComponentValue;
-            m_MaxReferenceEDR = screen.maximumReferenceExtendedDynamicRangeColorComponentValue;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "EDR: current %.2f / max %.2f / reference %.2f",
-                        m_CurrentEDR, m_MaxPotentialEDR, m_MaxReferenceEDR);
+            setCurrentEDR(screen);
 
         #ifndef IMGUI_DISABLE
             DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
@@ -1519,6 +1561,23 @@ public:
         }
     }
 
+    void setCurrentEDR(NSScreen* screen)
+    {
+        m_MaxPotentialEDR = screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
+        m_MaxReferenceEDR = screen.maximumReferenceExtendedDynamicRangeColorComponentValue;
+        m_ReferenceWhite  = m_MaxReferenceEDR > 1.0 ? 100.0f : 203.0f; // SDR is 100 nits in MBP's HDR Video preset (reference mode)
+
+        float currentEDR = screen.maximumExtendedDynamicRangeColorComponentValue;
+        if (currentEDR != m_CurrentEDR.load()) {
+            m_CurrentEDR.store(currentEDR);
+        }
+
+        DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
+            config.isReferenceModeDisplay = m_MaxReferenceEDR > 1.0;
+            config.referenceWhite = m_ReferenceWhite;
+        });
+    }
+
     void startGPUCapture()
     {
         if (m_IsGPUCapturing) return;
@@ -1560,8 +1619,16 @@ public:
         }
 	}
 
-    id<CAMetalDrawable> nextDrawable()
+    id<CAMetalDrawable> nextDrawable(bool forceNew=false)
     {
+        if (forceNew) {
+            // release the cached drawable so a new one will be requested
+            if (m_Drawable) {
+                [m_Drawable release];
+                m_Drawable = nil;
+            }
+        }
+
         if (m_Drawable == nil) {
             id<CAMetalDrawable> drawable = [m_MetalLayer nextDrawable];
             if (!drawable) {
@@ -1636,7 +1703,31 @@ public:
         if (m_UseEDR != cfg.useEDR) {
             m_UseEDR = cfg.useEDR;
             m_HdrMetadataChanged = true;
+
+            // toggling EDR changes the pixelFormat, meaning we need to throw away
+            // the previously fetched drawable. If we don't do this, there will be 1 frame of glitched output.
+            m_NeedNewDrawable = true;
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of useEDR to %d", m_UseEDR);
+        }
+
+        if (m_ReferenceWhite != cfg.referenceWhite) {
+            m_ReferenceWhite = cfg.referenceWhite;
+            m_HdrMetadataChanged = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of ReferenceWhite to %.2f", m_ReferenceWhite);
+        }
+
+        if (m_MinNits != cfg.minNits) {
+            m_MinNits = cfg.minNits;
+            m_HdrMetadataChanged = true;
+            m_OverrideNits = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of MinNits to %.4f", m_MinNits);
+        }
+
+        if (m_MaxNits != cfg.maxNits) {
+            m_MaxNits = cfg.maxNits;
+            m_HdrMetadataChanged = true;
+            m_OverrideNits = true;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of MaxNits to %.2f", m_MaxNits);
         }
 
         if (const char* env_capture = std::getenv("MTL_CAPTURE_ENABLED");
@@ -1694,10 +1785,12 @@ private:
     bool m_ProMotionAllowsVRR;
     bool m_UsePTSForVRR;
     bool m_UseEDR;
+    bool m_NeedNewDrawable;
     bool m_ShowMetalHUD;
-    CGFloat m_MaxPotentialEDR;
-    CGFloat m_CurrentEDR;
-    CGFloat m_MaxReferenceEDR;
+    float m_MaxPotentialEDR;
+    std::atomic<float> m_CurrentEDR;
+    float m_MaxReferenceEDR;
+    float m_ReferenceWhite;
     int m_RequestedPresentMode;
     CFTimeInterval m_MinRefreshInterval;
     CFTimeInterval m_MaxRefreshInterval;
@@ -1719,6 +1812,7 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
 @implementation VTMetalObserver {
     VTMetalRenderer* _renderer;
     id _note;
+    id _note2;
 }
 
 - (id)initWithRenderer:(VTMetalRenderer *)renderer forWindow:(NSWindow *)window {
@@ -1735,11 +1829,21 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
             _renderer->setPaused( !shouldRender );
         };
 
+        void (^updateEDR)(NSNotification*) = ^(NSNotification *note) {
+            NSScreen* screen = [NSScreen mainScreen];
+            _renderer->setCurrentEDR(screen);
+        };
+
         // Pause rendering when off screen or hidden
         _note = [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification
                                                                   object:window
                                                                    queue:nil
                                                               usingBlock:pauseIfHidden];
+        // Watch for EDR changes
+        _note2 = [[NSNotificationCenter defaultCenter] addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                                                                   object:NSApp
+                                                                    queue:nil
+                                                               usingBlock:updateEDR];
     }
     return self;
 }
@@ -1748,6 +1852,7 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     if (_note) {
         [[NSNotificationCenter defaultCenter] removeObserver:_note];
         _note = nil;
+        _note2 = nil;
     }
 }
 
