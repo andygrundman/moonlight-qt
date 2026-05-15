@@ -371,7 +371,7 @@ void DevUISettings::Render()
 
         ImGui::SetNextWindowPos(ImVec2(panelX, panelY), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(panelWidth, panelHeight), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowBgAlpha(0.70f);
+        //ImGui::SetNextWindowBgAlpha(0.90f);
 
         if (ImGui::Begin("Advanced Controls", &panelOpen, commonFlags)) {
             ImGui::SeparatorText("Video");
@@ -883,6 +883,7 @@ void DevColors::InitColors(DisplayOutputFormat outputFormat)
     style.Colors[ImGuiCol_ButtonActive]           = convert4(ImVec4(0.06f, 0.53f, 0.98f, 1.00f));
     style.Colors[ImGuiCol_Header]                 = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.31f));
     style.Colors[ImGuiCol_HeaderHovered]          = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.80f));
+    style.Colors[ImGuiCol_Separator]              = style.Colors[ImGuiCol_Border];
     style.Colors[ImGuiCol_HeaderActive]           = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
     style.Colors[ImGuiCol_SeparatorHovered]       = convert4(ImVec4(0.10f, 0.40f, 0.75f, 0.78f));
     style.Colors[ImGuiCol_SeparatorActive]        = convert4(ImVec4(0.10f, 0.40f, 0.75f, 1.00f));

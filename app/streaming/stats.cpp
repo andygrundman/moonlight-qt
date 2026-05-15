@@ -514,7 +514,6 @@ void Stats::RenderGraphs()
     float scale = std::min(workSize.x / 3840.0f, workSize.y / 2160.0f);
     float graphW = 850.0f * scale;
     float graphH = 150.0f * scale;
-    float opacity = 0.7f;
 
     // Row 1: 3 graphs
     // Row 2: 3 graphs
