@@ -751,6 +751,71 @@ Flickable {
                     spacing: 20
 
                     Column {
+                        width: (parent.width - parent.spacing)
+                        spacing: 5
+
+                        Label {
+                            id: resAudioRendererTitle
+                            text: qsTr("Audio renderer")
+                            font.pointSize: 12
+                            wrapMode: Text.Wrap
+                        }
+
+                        AutoResizingComboBox {
+                            id: audioRendererComboBox
+                            Layout.fillWidth: true
+                            textRole: "text"
+                            visible: Qt.platform.os === "osx"
+
+                            model: ListModel {
+                                id: audioRendererListModel
+
+                                ListElement {
+                                    text: qsTr("CoreAudio (recommended)")
+                                    val: StreamingPreferences.AUDIO_RENDERER_COREAUDIO
+                                }
+
+                                ListElement {
+                                    text: qsTr("SDL")
+                                    val: StreamingPreferences.AUDIO_RENDERER_SDL
+                                }
+                            }
+
+                            Component.onCompleted: {
+                                if (!visible) {
+                                    return
+                                }
+
+                                currentIndex = 0
+                                for (var i = 0; i < audioRendererListModel.count; i++) {
+                                    if (StreamingPreferences.audioRenderer === audioRendererListModel.get(i).val) {
+                                        currentIndex = i
+                                        break
+                                    }
+                                }
+
+                                activated(currentIndex)
+                            }
+
+                            onActivated: {
+                                StreamingPreferences.audioRenderer = audioRendererListModel.get(currentIndex).val
+                            }
+
+                            ToolTip.delay: 1000
+                            ToolTip.timeout: -1
+                            ToolTip.visible: hovered
+                            ToolTip.text:
+                                qsTr("CoreAudio is a native audio renderer with support for spatial audio.\n\n") +
+                                qsTr("SDL is the classic Moonlight audio renderer and is likely more stable.")
+                        }
+                    }
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: 20
+
+                    Column {
                         width: (parent.width - parent.spacing) * 0.5
                         spacing: 5
 
@@ -820,7 +885,8 @@ Flickable {
 
                             AutoResizingComboBox {
                                 id: spatialAudioComboBox
-                                enabled: StreamingPreferences.audioConfig != StreamingPreferences.AC_STEREO
+                                enabled: StreamingPreferences.audioRenderer == StreamingPreferences.AUDIO_RENDERER_COREAUDIO
+                                        && StreamingPreferences.audioConfig != StreamingPreferences.AC_STEREO
                                 textRole: "text"
                                 Component.onCompleted: {
                                     var saved_sac = StreamingPreferences.spatialAudioConfig

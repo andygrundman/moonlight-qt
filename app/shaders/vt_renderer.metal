@@ -73,9 +73,9 @@ constant float PQ_N = 0.1593017578125;     // 1305/8192
 
 // BT.2020 to Rec.709/sRGB color space conversion matrix
 constant float3x3 bt2020_to_rec709 = float3x3(
-    float3( 1.7166511, -0.3556708, -0.2533663),
-    float3(-0.6666844,  1.6164812,  0.0157685),
-    float3( 0.0176399, -0.0427706,  0.9421031)
+    float3( 1.7166511, -0.6666844,  0.0176399),
+    float3(-0.3556708,  1.6164812, -0.0427706),
+    float3(-0.2533663,  0.0157685,  0.9421031)
 );
 
 // Convert from PQ curve to linear light
@@ -100,8 +100,21 @@ float3 pq_to_linear_rgb(float3 pq_rgb) {
     );
 }
 
+float3 scaleEDR(float3 rgb, float maxInput, float maxOutput) {
+    if (maxInput <= maxOutput) {
+        return rgb;
+    }
+    float a = maxOutput / (maxInput * maxInput);
+    float b = 1.0f / maxOutput;
+    float colorMax = max(rgb.r, max(rgb.g, rgb.b));
+    return rgb * (1.0f + a * colorMax) / (1.0f + b * colorMax);
+}
+
 fragment half4 ps_draw_linear(Vertex v [[ stage_in ]],
                                constant CscParams &cscParams [[ buffer(0) ]],
+                               constant float &edrHeadroom [[ buffer(1) ]],
+                               constant float &referenceWhite [[ buffer(2) ]],
+                               constant float &maxNits [[ buffer(3) ]],
                                texture2d<half> luminancePlane [[ texture(0) ]],
                                texture2d<half> chrominancePlane [[ texture(1) ]])
 {
@@ -120,10 +133,43 @@ fragment half4 ps_draw_linear(Vertex v [[ stage_in ]],
     // Convert from normalized PQ signal to absolute linear nits.
     float3 linearRGB = pq_to_linear_rgb(rgb);
 
-    // Convert nits to EDR linear values.
-    // This should match opticalOutputScale in HDR10MetadataWithDisplayInfo().
-    constexpr float referenceWhite = 203.0f;
-    linearRGB = linearRGB / referenceWhite;
+    // referenceWhite should match opticalOutputScale in HDR10MetadataWithDisplayInfo().
+    // referenceWhite is usually 203 or 100.
+    // maxNits is usually 10000.
+    linearRGB = scaleEDR(linearRGB / referenceWhite, maxNits / referenceWhite, edrHeadroom);
+
+    return half4(half3(linearRGB), 1.0h);
+}
+
+fragment half4 ps_draw_linear_triplanar(Vertex v [[ stage_in ]],
+                               constant CscParams &cscParams [[ buffer(0) ]],
+                               constant float &edrHeadroom [[ buffer(1) ]],
+                               constant float &referenceWhite [[ buffer(2) ]],
+                               constant float &maxNits [[ buffer(3) ]],
+                               texture2d<half> luminancePlane [[ texture(0) ]],
+                               texture2d<half> chrominancePlaneU [[ texture(1) ]],
+                               texture2d<half> chrominancePlaneV [[ texture(2) ]])
+{
+    float2 chromaOffset = float2(cscParams.chromaOffset) / float2(luminancePlane.get_width(),
+                                                                  luminancePlane.get_height());
+    half3 yuv = half3(luminancePlane.sample(s, v.texCoords).r,
+                      chrominancePlaneU.sample(s, v.texCoords + chromaOffset).r,
+                      chrominancePlaneV.sample(s, v.texCoords + chromaOffset).r);
+    yuv *= cscParams.bitnessScaleFactor;
+    yuv -= cscParams.offsets;
+
+    half3 rgbHalf = yuv * cscParams.matrix;
+
+    // PQ EOTF should be done in float precision.
+    float3 rgb = clamp(float3(rgbHalf), 0.0f, 1.0f);
+
+    // Convert from normalized PQ signal to absolute linear nits.
+    float3 linearRGB = pq_to_linear_rgb(rgb);
+
+    // referenceWhite should match opticalOutputScale in HDR10MetadataWithDisplayInfo().
+    // referenceWhite is usually 203 or 100.
+    // maxNits is usually 10000.
+    linearRGB = scaleEDR(linearRGB / referenceWhite, maxNits / referenceWhite, edrHeadroom);
 
     return half4(half3(linearRGB), 1.0h);
 }

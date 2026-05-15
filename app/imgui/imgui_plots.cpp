@@ -2,6 +2,7 @@
 #include "plotdesc.h"
 #include "IconsFontAwesome7.h"
 #include "fa-solid-900.h"
+#include "devui.h"
 
 #include "imgui.h"
 #include "implot.h"
@@ -73,8 +74,8 @@ void ImGuiPlots::ImGui_init(IFFmpegRenderer* renderer)
 
     // io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
     // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
     //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigMacOSXBehaviors = false; // Don't swap ctrl and super

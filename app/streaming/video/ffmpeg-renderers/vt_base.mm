@@ -4,6 +4,8 @@
 #include "vt.h"
 #undef AVMediaType
 
+#include "imgui/devui.h"
+
 #import <Cocoa/Cocoa.h>
 #import <VideoToolbox/VideoToolbox.h>
 #import <AVFoundation/AVFoundation.h>
@@ -16,7 +18,10 @@ VTBaseRenderer::VTBaseRenderer(IFFmpegRenderer::RendererType type) :
     IFFmpegRenderer(type),
     m_HdrMetadataChanged(false),
     m_MasteringDisplayColorVolume(nullptr),
-    m_ContentLightLevelInfo(nullptr) {
+    m_ContentLightLevelInfo(nullptr),
+    m_MinNits(0.0f),
+    m_MaxNits(0.0f),
+    m_OverrideNits(false) {
 
 }
 
@@ -154,6 +159,8 @@ void VTBaseRenderer::setHdrMode(bool enabled) {
             mdcv.luminance_min = __builtin_bswap32(hdrMetadata.minDisplayLuminance);
 
             m_MasteringDisplayColorVolume = CFDataCreate(nullptr, (const UInt8*)&mdcv, sizeof(mdcv));
+            m_MinNits = (float)hdrMetadata.minDisplayLuminance / 10000.0f;
+            m_MaxNits = (float)hdrMetadata.maxDisplayLuminance;
         }
 
         if (hdrMetadata.maxContentLightLevel != 0 && hdrMetadata.maxFrameAverageLightLevel != 0) {
@@ -168,6 +175,16 @@ void VTBaseRenderer::setHdrMode(bool enabled) {
 
             m_ContentLightLevelInfo = CFDataCreate(nullptr, (const UInt8*)&cll, sizeof(cll));
         }
+
+        m_OverrideNits = false;
+        DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
+            config.minNits = m_MinNits;
+            config.maxNits = m_MaxNits;
+        });
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "HDR Metadata updated from host: minDisplayLuminance %.4f, maxDisplayLuminance %.2f",
+                    m_MinNits, m_MaxNits);
     }
 
     m_HdrMetadataChanged = true;

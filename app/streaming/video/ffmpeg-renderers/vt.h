@@ -17,6 +17,9 @@ protected:
     bool m_HdrMetadataChanged; // Manual reset
     CFDataRef m_MasteringDisplayColorVolume;
     CFDataRef m_ContentLightLevelInfo;
+    float m_MinNits;
+    float m_MaxNits;
+    bool m_OverrideNits;
 };
 
 #endif // __OBJC__

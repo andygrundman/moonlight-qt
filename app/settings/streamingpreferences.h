@@ -18,6 +18,13 @@ public:
 
     void reload();
 
+    enum AudioRenderer
+    {
+        AUDIO_RENDERER_COREAUDIO,
+        AUDIO_RENDERER_SDL
+    };
+    Q_ENUM(AudioRenderer)
+
     enum AudioConfig
     {
         AC_STEREO,
@@ -182,6 +189,7 @@ public:
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
     Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged)
+    Q_PROPERTY(AudioRenderer audioRenderer MEMBER audioRenderer NOTIFY audioRendererChanged)
     Q_PROPERTY(Renderer renderer MEMBER renderer NOTIFY rendererChanged)
     Q_PROPERTY(FramePacingMode framePacingMode MEMBER framePacingMode NOTIFY framePacingModeChanged)
     Q_PROPERTY(PresentMode presentMode MEMBER presentMode NOTIFY presentModeChanged)
@@ -231,6 +239,7 @@ public:
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
+    AudioRenderer audioRenderer;
     FramePacingMode framePacingMode;
     PresentMode presentMode;
     bool showPerformanceGraphs;
@@ -274,6 +283,7 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void audioRendererChanged();
     void framePacingModeChanged();
     void presentModeChanged();
     void showPerformanceGraphsChanged();

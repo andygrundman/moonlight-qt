@@ -23,6 +23,8 @@
 
 IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATION opusConfig)
 {
+    StreamingPreferences *prefs = StreamingPreferences::get();
+
     // Handle explicit ML_AUDIO setting and fail if the requested backend fails
     QString mlAudio = qgetenv("ML_AUDIO").toLower();
     if (mlAudio == "sdl") {
@@ -57,7 +59,9 @@ IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATI
 
 #ifdef HAVE_COREAUDIO
     // Native renderer for macOS/iOS/tvOS, suports spatial audio
-    TRY_INIT_RENDERER(CoreAudioRenderer, opusConfig)
+    if (prefs->audioRenderer == StreamingPreferences::AUDIO_RENDERER_COREAUDIO) {
+        TRY_INIT_RENDERER(CoreAudioRenderer, opusConfig)
+    }
 #endif
 
     // Default to SDL
