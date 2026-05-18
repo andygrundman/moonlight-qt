@@ -1,19 +1,21 @@
-#ifndef IMGUI_DISABLE
+#include "devui.h"
 
-    #include "devui.h"
+#include "imgui.h"
+#include "imgui/IconsFontAwesome7.h"
+#include "implot.h"
+#include "settings/streamingpreferences.h"
+#include "streaming/qpc.h"
+#include "streaming/session.h"
+#include "streaming/video/ffmpeg-renderers/framepacing/framecadence.h"
+#include "streaming/video/ffmpeg-renderers/framepacing/framepacer.h"
+#include "streaming/video/ffmpeg-renderers/framepacing/framequeue.h"
 
-    #include "imgui.h"
-    #include "imgui/IconsFontAwesome7.h"
-    #include "implot.h"
-    #include "settings/streamingpreferences.h"
-    #include "streaming/qpc.h"
-    #include "streaming/session.h"
-    #include "streaming/video/ffmpeg-renderers/framepacing/framecadence.h"
-    #include "streaming/video/ffmpeg-renderers/framepacing/framepacer.h"
-    #include "streaming/video/ffmpeg-renderers/framepacing/framequeue.h"
+#include <algorithm>
+#include <cstdio>
 
-    #include <algorithm>
-    #include <cstdio>
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
 
 DevUISettings& DevUISettings::instance()
 {
@@ -256,17 +258,15 @@ static double dot(const ImVec4& a, const ImVec4& b)
 
 static ImVec4 SRGBtoBT2020(ImVec4 col)
 {
-    const ImVec4 to2020[4] = {
+    const ImVec4 to2020[3] = {
         {0.627392, 0.32903, 0.0432691, 0.0},
         {0.0691229, 0.9195232, 0.0113204, 0.0},
-        {0.0164229, 0.088042, 0.8956166, 0.0},
-        {0.0, 0.0, 0.0, 1.0}
+        {0.0164229, 0.088042, 0.8956166, 0.0}
     };
 
     col.x = dot(to2020[0], col);
     col.y = dot(to2020[1], col);
     col.z = dot(to2020[2], col);
-    col.w = dot(to2020[3], col);
 
     return col;
 }
@@ -364,14 +364,18 @@ void DevUISettings::Render()
 
     // Panel
     if (panelOpen) {
+    #ifdef __APPLE__
         // allow keyboard in advanced panel for things like entering numbers
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        SDL_StartTextInput();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SDL_StartTextInput();
+        });
+    #endif
 
         ImGui::SetNextWindowPos(ImVec2(panelX, panelY), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(panelWidth, panelHeight), ImGuiCond_FirstUseEver);
-        //ImGui::SetNextWindowBgAlpha(0.90f);
+        ImGui::SetNextWindowBgAlpha(0.85f);
 
         if (ImGui::Begin("Advanced Controls", &panelOpen, commonFlags)) {
             ImGui::SeparatorText("Video");
@@ -691,10 +695,14 @@ void DevUISettings::Render()
         ImGui::End();
     }
     else {
+    #ifdef __APPLE__
         // no keyboard when panel is closed
         ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
-        SDL_StopTextInput();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SDL_StopTextInput();
+        });
+    #endif
     }
 
     if (configChanged) {
@@ -814,6 +822,10 @@ void DevUISettings::DrawFrameTimingBar(const char* label,
 #define RGBGetGValue(rgb) ((rgb >> 8) & 0x000000FF)
 #define RGBGetRValue(rgb) ((rgb >> 16) & 0x000000FF)
 
+inline ImVec4 ImLerp(const ImVec4& a, const ImVec4& b, float t) {
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+}
+
 void DevColors::InitColors(DisplayOutputFormat outputFormat)
 {
     // ImGui colors are much too bright when output in a PQ colorspace
@@ -870,7 +882,7 @@ void DevColors::InitColors(DisplayOutputFormat outputFormat)
     style.Colors[ImGuiCol_TitleBg]                = convert4(ImVec4(0.04f, 0.04f, 0.04f, 1.00f));
     style.Colors[ImGuiCol_TitleBgActive]          = convert4(ImVec4(0.16f, 0.29f, 0.48f, 1.00f));
     style.Colors[ImGuiCol_TitleBgCollapsed]       = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.51f));
-    // style.Colors[ImGuiCol_MenuBarBg]              = convert4(ImVec4(0.14f, 0.14f, 0.14f, 1.00f));
+    style.Colors[ImGuiCol_MenuBarBg]              = convert4(ImVec4(0.14f, 0.14f, 0.14f, 1.00f));
     // style.Colors[ImGuiCol_ScrollbarBg]            = convert4(ImVec4(0.02f, 0.02f, 0.02f, 0.53f));
     // style.Colors[ImGuiCol_ScrollbarGrab]          = convert4(ImVec4(0.31f, 0.31f, 0.31f, 1.00f));
     // style.Colors[ImGuiCol_ScrollbarGrabHovered]   = convert4(ImVec4(0.41f, 0.41f, 0.41f, 1.00f));
@@ -887,6 +899,17 @@ void DevColors::InitColors(DisplayOutputFormat outputFormat)
     style.Colors[ImGuiCol_HeaderActive]           = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
     style.Colors[ImGuiCol_SeparatorHovered]       = convert4(ImVec4(0.10f, 0.40f, 0.75f, 0.78f));
     style.Colors[ImGuiCol_SeparatorActive]        = convert4(ImVec4(0.10f, 0.40f, 0.75f, 1.00f));
+
+    style.Colors[ImGuiCol_InputTextCursor]        = style.Colors[ImGuiCol_Text];
+    style.Colors[ImGuiCol_TabHovered]             = style.Colors[ImGuiCol_HeaderHovered];
+    style.Colors[ImGuiCol_Tab]                    = ImLerp(style.Colors[ImGuiCol_Header],       style.Colors[ImGuiCol_TitleBgActive], 0.80f);
+    style.Colors[ImGuiCol_TabSelected]            = ImLerp(style.Colors[ImGuiCol_HeaderActive], style.Colors[ImGuiCol_TitleBgActive], 0.60f);
+    style.Colors[ImGuiCol_TabSelectedOverline]    = style.Colors[ImGuiCol_HeaderActive];
+    style.Colors[ImGuiCol_TabDimmed]              = ImLerp(style.Colors[ImGuiCol_Tab],          style.Colors[ImGuiCol_TitleBg], 0.80f);
+    style.Colors[ImGuiCol_TabDimmedSelected]      = ImLerp(style.Colors[ImGuiCol_TabSelected],  style.Colors[ImGuiCol_TitleBg], 0.40f);
+    style.Colors[ImGuiCol_TabDimmedSelectedOverline] = convert4(ImVec4(0.50f, 0.50f, 0.50f, 0.00f));
+    //style.Colors[ImGuiCol_DockingPreview]         = style.Colors[ImGuiCol_HeaderActive] * ImVec4(1.0f, 1.0f, 1.0f, 0.7f);
+
     // style.Colors[ImGuiCol_ResizeGrip]             = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.20f));
     // style.Colors[ImGuiCol_ResizeGripHovered]      = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.67f));
     // style.Colors[ImGuiCol_ResizeGripActive]       = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.95f));
@@ -894,16 +917,16 @@ void DevColors::InitColors(DisplayOutputFormat outputFormat)
     // style.Colors[ImGuiCol_DockingEmptyBg]         = convert4(ImVec4(0.20f, 0.20f, 0.20f, 1.00f));
     style.Colors[ImGuiCol_PlotLines]              = convert4(ImVec4(0.61f, 0.61f, 0.61f, 1.00f));
     style.Colors[ImGuiCol_PlotLinesHovered]       = convert4(ImVec4(1.00f, 0.43f, 0.35f, 1.00f));
-    // style.Colors[ImGuiCol_PlotHistogram]          = convert4(ImVec4(0.90f, 0.70f, 0.00f, 1.00f));
-    // style.Colors[ImGuiCol_PlotHistogramHovered]   = convert4(ImVec4(1.00f, 0.60f, 0.00f, 1.00f));
+    style.Colors[ImGuiCol_PlotHistogram]          = convert4(ImVec4(0.90f, 0.70f, 0.00f, 1.00f));
+    style.Colors[ImGuiCol_PlotHistogramHovered]   = convert4(ImVec4(1.00f, 0.60f, 0.00f, 1.00f));
     // style.Colors[ImGuiCol_TableHeaderBg]          = convert4(ImVec4(0.19f, 0.19f, 0.20f, 1.00f));
     // style.Colors[ImGuiCol_TableBorderStrong]      = convert4(ImVec4(0.31f, 0.31f, 0.35f, 1.00f));
     // style.Colors[ImGuiCol_TableBorderLight]       = convert4(ImVec4(0.23f, 0.23f, 0.25f, 1.00f));
     // style.Colors[ImGuiCol_TableRowBg]             = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
     // style.Colors[ImGuiCol_TableRowBgAlt]          = convert4(ImVec4(1.00f, 1.00f, 1.00f, 0.06f));
     // style.Colors[ImGuiCol_TextSelectedBg]         = convert4(ImVec4(0.26f, 0.59f, 0.98f, 0.35f));
-    // style.Colors[ImGuiCol_DragDropTarget]         = convert4(ImVec4(1.00f, 1.00f, 0.00f, 0.90f));
-    // style.Colors[ImGuiCol_DragDropTargetBg]       = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
+    style.Colors[ImGuiCol_DragDropTarget]         = convert4(ImVec4(1.00f, 1.00f, 0.00f, 0.90f));
+    style.Colors[ImGuiCol_DragDropTargetBg]       = convert4(ImVec4(0.00f, 0.00f, 0.00f, 0.00f));
     // style.Colors[ImGuiCol_UnsavedMarker]          = convert4(ImVec4(1.00f, 1.00f, 1.00f, 1.00f));
     // style.Colors[ImGuiCol_NavCursor]              = convert4(ImVec4(0.26f, 0.59f, 0.98f, 1.00f));
     // style.Colors[ImGuiCol_NavWindowingHighlight]  = convert4(ImVec4(1.00f, 1.00f, 1.00f, 0.70f));
@@ -922,5 +945,3 @@ void DevColors::InitColors(DisplayOutputFormat outputFormat)
 }
 
 DevColors DevUIColors;
-
-#endif
