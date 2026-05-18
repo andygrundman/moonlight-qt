@@ -18,6 +18,11 @@ bool GamepadMenu::IsVisible()
     return m_Visible.load();
 }
 
+void GamepadMenu::SetActiveJoystickID(SDL_JoystickID jsid)
+{
+    m_ActiveJoystickID.store(jsid);
+}
+
 struct MenuItem {
     const char* label;
     std::function<void()> callback;
@@ -36,9 +41,10 @@ void GamepadMenu::Render()
     if (ImGui::Shortcut(ImGuiKey_Space | ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiMod_Shift, ImGuiInputFlags_RouteGlobal)) {
         panelOpen = !panelOpen;
 
+        // Clear keys down so we aren't holding keys while in the menu
         Session::get()->getInputHandler()->raiseAllKeys();
     }
-    if (ImGui::Shortcut(ImGuiKey_GamepadStart | ImGuiKey_GamepadBack, ImGuiInputFlags_RouteGlobal)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart) && ImGui::IsKeyPressed(ImGuiKey_GamepadBack)) {
         panelOpen = !panelOpen;
 
         // Clear buttons down on all gamepads so we aren't holding the buttons while in the menu
@@ -74,11 +80,16 @@ void GamepadMenu::Render()
             ImGui::Separator();
             ImGui::Spacing();
 
+            // last used SDL gamepad
+            SDL_JoystickID jsid = m_ActiveJoystickID.load();
+
             MenuItem items[] = {
                 {ICON_FA_COMPUTER_MOUSE " Enter Mouse Mode",
-                 []() {
-                    SDL_JoystickID jsid = 0; // XXX maybe support multiple controllers
-                    Session::get()->toggleMouseEmulation(jsid);
+                 [jsid]() {
+                    if (jsid >= 0) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "toggleMouseEmulation for SDL_JoystickID %d", jsid);
+                        Session::get()->toggleMouseEmulation(jsid);
+                    }
                  }},
                 {ICON_FA_CHART_BAR " Toggle stats",
                  []() {
@@ -101,6 +112,11 @@ void GamepadMenu::Render()
                     Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayDebug, false);
                     Stats::instance().SetShowGraphs(false);
                     DevUISettings::instance().SetPanelOpen(false);
+                #ifdef __APPLE__
+                    DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
+                        config.showMetalHud = false;
+                    });
+                #endif
                  }},
                 {ICON_FA_PAUSE " Disconnect",
                  []() {

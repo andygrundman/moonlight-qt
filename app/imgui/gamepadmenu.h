@@ -11,6 +11,7 @@ class GamepadMenu
     static GamepadMenu& instance();
 
     bool IsVisible();
+    void SetActiveJoystickID(SDL_JoystickID jsid);
     void Render();
     void CloseMenu();
 
