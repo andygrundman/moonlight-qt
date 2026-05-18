@@ -291,6 +291,9 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         return;
     }
 
+    // Help the ImGui code know the last used SDL JoystickID
+    GamepadMenu::instance().SetActiveJoystickID(event->which);
+
     if (m_SwapFaceButtons) {
         switch (event->button) {
         case SDL_CONTROLLER_BUTTON_A:
