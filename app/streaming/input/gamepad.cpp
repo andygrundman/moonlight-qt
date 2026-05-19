@@ -1044,6 +1044,10 @@ void SdlInputHandler::raiseAllButtons()
 {
     int mask = getAttachedGamepadMask();
 
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        m_GamepadState[i].buttons = 0;
+    }
+
     if (m_MultiController) {
         int numJoysticks = SDL_NumJoysticks();
         for (int i = 0; i < numJoysticks; i++) {
