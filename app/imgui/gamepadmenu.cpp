@@ -35,8 +35,8 @@ void GamepadMenu::Render()
         return;
     }
 
-    // Setup 2 global ImGui shortcuts (key chord handlers) for bringing up the quick menu:
-    // Select + Start on gamepad, or Ctrl-Shift-Alt-Space
+    // Setup a global ImGui shortcut (key chord handlers) for bringing up the quick menu:
+    // Ctrl-Shift-Alt-Space
     bool panelOpen = m_Visible.load();
     if (ImGui::Shortcut(ImGuiKey_Space | ImGuiMod_Ctrl | ImGuiMod_Alt | ImGuiMod_Shift, ImGuiInputFlags_RouteGlobal)) {
         panelOpen = !panelOpen;
@@ -44,8 +44,11 @@ void GamepadMenu::Render()
         // Clear keys down so we aren't holding keys while in the menu
         Session::get()->getInputHandler()->raiseAllKeys();
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart) && ImGui::IsKeyPressed(ImGuiKey_GamepadBack)) {
-        panelOpen = !panelOpen;
+
+    // Gamepad can't be a Shortcut, so we check for Start + Select being down.
+    // This only opens the menu, and it must be closed with B or choosing an item.
+    if (!panelOpen && ImGui::IsKeyDown(ImGuiKey_GamepadStart) && ImGui::IsKeyDown(ImGuiKey_GamepadBack)) {
+        panelOpen = true;
 
         // Clear buttons down on all gamepads so we aren't holding the buttons while in the menu
         Session::get()->getInputHandler()->raiseAllButtons();
