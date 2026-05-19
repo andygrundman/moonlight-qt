@@ -394,27 +394,28 @@ public:
 
         int colorspace = getFrameColorspace(frame);
         CGColorSpaceRef newColorSpace;
+        MTLPixelFormat newPixelFormat;
         ParamBuffer paramBuffer;
 
         switch (colorspace) {
         case COLORSPACE_REC_709:
-            m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
-            m_MetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
+            newPixelFormat = MTLPixelFormatBGRA8Unorm;
             break;
         case COLORSPACE_REC_2020:
-            m_MetalLayer.pixelFormat = MTLPixelFormatBGR10A2Unorm;
+            newPixelFormat = MTLPixelFormatBGR10A2Unorm;
             if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
                 // https://developer.apple.com/documentation/metal/hdr_content/using_color_spaces_to_display_hdr_content
-                m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
+                newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
             }
             else {
-                m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2020);
+                newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2020);
             }
             break;
         default:
         case COLORSPACE_REC_601:
-            m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-            m_MetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+            newPixelFormat = MTLPixelFormatBGRA8Unorm;
             break;
         }
 
@@ -435,7 +436,7 @@ public:
 
         if (m_UseEDR && frame->color_trc == AVCOL_TRC_SMPTE2084) {
             // EDR requires a linear floating-point pixel format
-            m_MetalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+            newPixelFormat = MTLPixelFormatRGBA16Float;
 
             // change to linear colorspace
             CFStringRef name;
@@ -454,7 +455,6 @@ public:
 
             CGColorSpaceRelease(newColorSpace);
             newColorSpace = CGColorSpaceCreateWithName(name);
-            m_MetalLayer.colorspace = newColorSpace;
 
             // MDCV contains min/max values from the host
             // The user can override this if they want to
@@ -478,6 +478,13 @@ public:
         else {
             m_MetalLayer.EDRMetadata = nullptr;
         }
+
+        // Set the new colorspace and pixelFormat, must be done on main thread
+        // or we risk a "Deleted thread with uncommitted CATransaction" error when the render thread exits
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            m_MetalLayer.pixelFormat = newPixelFormat;
+            m_MetalLayer.colorspace = newColorSpace;
+        });
 
         // Get a new drawable if the pixel format was changed
         if (m_NeedNewDrawable) {
