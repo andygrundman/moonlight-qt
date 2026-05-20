@@ -775,27 +775,31 @@ public:
         }
 
 #ifndef IMGUI_DISABLE
-        ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
-        ImGui_ImplSDL2_NewFrame();
-        ImGui::NewFrame();
+        // avoid a crash at shutdown due to ImGui calling SDL
+        // TODO; refactor this out to a parent class
+        if (!FramePacer::instance().stopping()) {
+            ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
+            ImGui_ImplSDL2_NewFrame();
+            ImGui::NewFrame();
 
-        // Dockspace is cool but overkill
-        //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+            // Dockspace is cool but overkill
+            //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
 
-        DisplayOutputFormat outputFormat =
-              m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm ? OUTPUT_IS_PQ
-            : m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float ? OUTPUT_IS_LINEAR
-            : OUTPUT_IS_SDR;
-        DevUIColors.InitColors(outputFormat);
+            DisplayOutputFormat outputFormat =
+                m_MetalLayer.pixelFormat == MTLPixelFormatBGR10A2Unorm ? OUTPUT_IS_PQ
+                : m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float ? OUTPUT_IS_LINEAR
+                : OUTPUT_IS_SDR;
+            DevUIColors.InitColors(outputFormat);
 
-        Stats::instance().RenderGraphs();
-        DevUISettings::instance().Render();
-        GamepadMenu::instance().Render();
+            Stats::instance().RenderGraphs();
+            DevUISettings::instance().Render();
+            GamepadMenu::instance().Render();
 
-        ImGui::EndFrame();
-        ImGui::Render();
-        ImDrawData* draw_data = ImGui::GetDrawData();
-        ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
+            ImGui::EndFrame();
+            ImGui::Render();
+            ImDrawData* draw_data = ImGui::GetDrawData();
+            ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
+        }
 #endif
 
         [renderEncoder endEncoding];

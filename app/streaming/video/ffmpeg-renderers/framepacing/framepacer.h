@@ -103,15 +103,15 @@ class FramePacer: public IFramePacer
         return m_VsyncTimestamp.load();
     }
 
-  private:
-    FramePacer();
-    FramePacer(const FramePacer&) = delete;
-    FramePacer& operator=(const FramePacer&) = delete;
-
     inline bool stopping() const noexcept
     {
         return m_Stopping.load();
     }
+
+  private:
+    FramePacer();
+    FramePacer(const FramePacer&) = delete;
+    FramePacer& operator=(const FramePacer&) = delete;
 
     static int renderThread(void* context);
     bool renderModeImmediate();
