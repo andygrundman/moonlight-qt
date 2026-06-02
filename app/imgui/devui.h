@@ -74,6 +74,8 @@ struct DevUIConfig {
     bool enableDevUI = false;
     bool usePTSForVRR = false;
 
+    int audioRenderer = StreamingPreferences::AUDIO_RENDERER_SDL;
+
 #ifdef __APPLE__
     bool isProMotion = false;
     bool showMetalHud = false;
@@ -107,13 +109,14 @@ struct DevUIMetrics {
     int pacerDroppedFrames = 0;
     int presentMode = StreamingPreferences::PRESENT_AUTO;
     int windowMode = StreamingPreferences::WM_WINDOWED;
-    double presentAfterMinimumDuration = 0.0;
     double presentAtTime = 0.0;
     RunningStat presentLateMs = {};
     int presentMissed = 0;
     int displayLockedMissed = 0;
     RunningStat presentDelayMs = {};
     RunningStat presentIntervalMs = {};
+    RunningStat presentAMDHistory = {};
+    RunningStat submittedIntervalMs = {};
     double presentAccuracyMs = 0.0;
     float streamFps = 0.0;
     float displayHz = 0.0;
@@ -131,6 +134,7 @@ struct DevUIMetrics {
     // audio
     char audioOutputDeviceName[32] = {};
     double audioSampleRate = 48000.0;
+    int audioFrameDurationMs = 10;
     int opusChannelCount = 2;
     int audioChannels = 2;
     int spatialAudio = StreamingPreferences::SAC_DISABLED;
@@ -140,6 +144,8 @@ struct DevUIMetrics {
     char audioOutputDataSource[5] = {};
     double audioTotalSoftwareLatency = 0.0;
     double audioOutputHardwareLatency = 0.0;
+    int audioDropCount = 0;
+    float audioInBufferMs = 0.0;
 
     void reset()
     {
@@ -163,6 +169,9 @@ struct DevUIMetrics {
         presentLateMs.reset();
         presentDelayMs.reset();
         presentIntervalMs.reset();
+        presentAMDHistory.reset();
+
+        audioDropCount = 0;
     }
 };
 
