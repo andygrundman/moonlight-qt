@@ -14,7 +14,9 @@
 #define kRingBufferMaxSeconds 0.030
 
 CoreAudioRenderer::CoreAudioRenderer()
-    : m_SpatialBuffer(2, 4096)
+    : m_SpatialBuffer(2, 4096),
+    m_DropCount(0),
+    m_QueuedAudioSize{0}
 {
     DEBUG_TRACE("CoreAudioRenderer construct");
 
@@ -280,14 +282,10 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
         return false;
     }
 
-    return true;
-}
-
-void CoreAudioRenderer::updateMetrics()
-{
     DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
         metrics.opusChannelCount = m_opusConfig->channelCount;
         strncpy(metrics.audioOutputDeviceName, m_OutputDeviceName, sizeof(metrics.audioOutputDeviceName));
+        metrics.audioFrameDurationMs = m_AudioPacketDuration * 1000;
         metrics.audioSampleRate = m_OutputASBD.mSampleRate;
         metrics.audioChannels = m_OutputASBD.mChannelsPerFrame;
         metrics.spatialAudio = m_Spatial;
@@ -297,6 +295,16 @@ void CoreAudioRenderer::updateMetrics()
         strncpy(metrics.audioOutputDataSource, m_OutputDataSource, 5);
         metrics.audioTotalSoftwareLatency = m_TotalSoftwareLatency;
         metrics.audioOutputHardwareLatency = m_OutputHardwareLatency;
+    });
+
+    return true;
+}
+
+void CoreAudioRenderer::updateMetrics()
+{
+    DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
+        metrics.audioDropCount = m_DropCount;
+        metrics.audioInBufferMs = ((float)m_QueuedAudioSize.load() / (sizeof(float) * m_opusConfig->channelCount)) * m_AudioPacketDuration;
     });
 }
 
@@ -645,13 +653,17 @@ bool CoreAudioRenderer::submitAudio(int bytesWritten)
 
     // drop packet if we've fallen behind Moonlight's queue by at least 30 ms
     if (LiGetPendingAudioDuration() > 30) {
-        //m_ActiveWndAudioStats.totalGlitches++;
-        //m_ActiveWndAudioStats.droppedOverload++;
+        ++m_DropCount;
         return true;
     }
 
     // Advance the write pointer
     TPCircularBufferProduce(&m_RingBuffer, bytesWritten);
+
+    // Get buffered audio size
+    uint32_t availableBytes;
+    TPCircularBufferTail(&m_RingBuffer, &availableBytes);
+    m_QueuedAudioSize.store(availableBytes);
 
     return true;
 }

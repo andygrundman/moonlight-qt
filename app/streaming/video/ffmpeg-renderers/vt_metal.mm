@@ -90,6 +90,7 @@ struct PresentCallbackState
 
     std::atomic<double> lastPresented{0.0};
     std::atomic<double> averageGPUTime{1.0 / 240.0};
+    std::atomic<double> lastSubmitted{0.0};
 };
 
 // https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/TripleBuffering.html
@@ -840,6 +841,7 @@ public:
             // values we'll pass to DevUI
             double presentDelayMs = 0.0;
             double presentIntervalMs = 0.0;
+            double submittedIntervalMs = 0.0;
 
             // Graph frametime. Note that d.presentedTime can be 0.0 if the frame was missed for some reason.
             CFTimeInterval lastPresented = (CFTimeInterval)state->lastPresented.load();
@@ -868,8 +870,16 @@ public:
                             Stats::instance().SubmitPresentTimeUs(
                                 static_cast<uint64_t>(presentDelay * 1000000), presentMode);
                             presentDelayMs = presentDelay * 1000.0;
-                            ImGuiPlots::instance().observeFloat(PLOT_PRESENT_DELAY, static_cast<float>(presentDelayMs));
+                            //ImGuiPlots::instance().observeFloat(PLOT_PRESENT_DELAY, static_cast<float>(presentDelayMs));
                         }
+
+                        // present-to-present interval
+                        double lastSubmitted = state->lastSubmitted.load();
+                        if (lastSubmitted > 0.0) {
+                            submittedIntervalMs = (submittedPresentTime - lastSubmitted) * 1000.0;
+                            ImGuiPlots::instance().observeFloat(PLOT_PRESENT_DELAY, static_cast<float>(submittedIntervalMs));
+                        }
+                        state->lastSubmitted.store(submittedPresentTime);
 
                         state->pendingFrames.erase(it);
                         break;
@@ -882,6 +892,7 @@ public:
                 if (presentDelayMs > 0.0) {
                     metrics.presentDelayMs.add(presentDelayMs);
                     metrics.presentIntervalMs.add(presentIntervalMs);
+                    metrics.submittedIntervalMs.add(submittedIntervalMs);
                 }
             });
         #endif
@@ -899,7 +910,7 @@ public:
             DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
                 metrics.presentMode = pfi.presentMode;
                 metrics.presentAtTime = pfi.atTime;
-                metrics.presentAfterMinimumDuration = pfi.afterMinimumDuration;
+                metrics.presentAMDHistory.add(pfi.afterMinimumDuration);
                 if (pfi.submittedPresentTime > pfi.vsyncDeadline) {
                     // we missed the current deadline
                     metrics.presentLateMs.add((pfi.submittedPresentTime - pfi.vsyncDeadline) * 1000.0);
