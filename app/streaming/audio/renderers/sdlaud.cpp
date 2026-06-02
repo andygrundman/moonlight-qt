@@ -1,10 +1,13 @@
 #include "sdl.h"
+#include "imgui/devui.h"
 
 #include <Limelight.h>
 
 SdlAudioRenderer::SdlAudioRenderer()
     : m_AudioDevice(0),
-      m_AudioBuffer(nullptr)
+      m_AudioBuffer(nullptr),
+      m_DropCount(0),
+      m_QueuedAudioSize{0}
 {
     SDL_assert(!SDL_WasInit(SDL_INIT_AUDIO));
 
@@ -69,6 +72,13 @@ bool SdlAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* 
     // Start playback
     SDL_PauseAudioDevice(m_AudioDevice, 0);
 
+    DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
+        metrics.opusChannelCount = have.channels;
+        metrics.audioSampleRate = opusConfig->sampleRate;
+        metrics.audioFrameDurationMs = m_FrameDurationMs;
+
+    });
+
     return true;
 }
 
@@ -103,6 +113,7 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
     // Don't queue if there's already more than 30 ms of audio data waiting
     // in Moonlight's audio queue.
     if (LiGetPendingAudioDuration() > 30) {
+        ++m_DropCount;
         return true;
     }
 
@@ -117,7 +128,9 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
         }
 
         // Only queue more samples where there is 50 ms or less in SDL's queue
-        if (SDL_GetQueuedAudioSize(m_AudioDevice) / m_FrameSize * m_FrameDurationMs <= 50) {
+        int queueSize = SDL_GetQueuedAudioSize(m_AudioDevice);
+        if (queueSize / m_FrameSize * m_FrameDurationMs <= 50) {
+            m_QueuedAudioSize.store(queueSize + bytesWritten);
             break;
         }
 
@@ -136,4 +149,12 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
 IAudioRenderer::AudioFormat SdlAudioRenderer::getAudioBufferFormat()
 {
     return AudioFormat::Float32NE;
+}
+
+void SdlAudioRenderer::updateMetrics()
+{
+    DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
+        metrics.audioDropCount = m_DropCount;
+        metrics.audioInBufferMs = (float)m_QueuedAudioSize.load() / m_FrameSize * m_FrameDurationMs;
+    });
 }

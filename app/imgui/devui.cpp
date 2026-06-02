@@ -33,6 +33,7 @@ void DevUISettings::InitFromPrefs(StreamingPreferences& prefs)
     cfg.windowMode = prefs.windowMode;
     cfg.showStats = prefs.showPerformanceOverlay;
     cfg.showGraphs = prefs.showPerformanceGraphs;
+    cfg.audioRenderer = prefs.audioRenderer;
 
 #ifdef __APPLE__
     cfg.maxFramesInFlight = std::clamp(prefs.vtMetalFramesInFlight, 2, 3);
@@ -533,32 +534,45 @@ void DevUISettings::Render()
 
             ImGui::Text("Input stream: %s-channel Opus low-delay @ 48 kHz",
                 metrics.opusChannelCount == 6 ? "5.1" : metrics.opusChannelCount == 8 ? "7.1" : "2");
-            ImGui::Text("Output device: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
-            ImGui::Text("Render mode: %s %s %s %s",
-                metrics.spatialAudio != StreamingPreferences::SAC_DISABLED ?
-                    (metrics.audioPersonalizedHRTF ? "personalized spatial audio" : "spatial audio") : "passthrough",
-                metrics.spatialAudio == StreamingPreferences::SAC_HEAD_TRACKED ? "with head-tracking for" : "for",
-                !strcmp(metrics.audioOutputTransportType, "blue") ? "Bluetooth"
-                    : !strcmp(metrics.audioOutputTransportType, "bltn") ? "built-in"
-                    : !strcmp(metrics.audioOutputTransportType, "usb ") ? "USB"
-                    : !strcmp(metrics.audioOutputTransportType, "hdmi") ? "HDMI"
-                    : !strcmp(metrics.audioOutputTransportType, "airp") ? "AirPlay"
-                    : metrics.audioOutputTransportType,
-                !strcmp(metrics.audioOutputDataSource      , "hdpn") ? "headphones"
-                    : !strcmp(metrics.audioOutputDataSource, "ispk") ? "internal speakers"
-                    : !strcmp(metrics.audioOutputDataSource, "espk") ? "external speakers"
-                    : metrics.audioOutputDataSource);
-            ImGui::Text("Latency: %0.1fms (buffers %.1fms, hardware: %.1fms)",
-                (metrics.audioTotalSoftwareLatency + metrics.audioOutputHardwareLatency) * 1000.0,
-                metrics.audioTotalSoftwareLatency * 1000.0, metrics.audioOutputHardwareLatency * 1000.0);
-            if (metrics.spatialAudio != StreamingPreferences::SAC_DISABLED) {
-                configChanged |= ImGui::Checkbox("Enable head-tracking", &cfg.useHeadTracking);
+            if (cfg.audioRenderer == StreamingPreferences::AUDIO_RENDERER_COREAUDIO) {
+                ImGui::Text("Output: CoreAudio: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
+                ImGui::Text("Audio buffer: %.2fms", metrics.audioInBufferMs);
+                ImGui::Text("Drop count: %d", metrics.audioDropCount);
                 ImGui::SameLine();
-                HelpMarker(
-                    "Head-tracking works best when Game Mode is active and Moonlight is running fullscreen. Game Mode reduces Bluetooth latency in AirPods from 160ms to about 80ms, although this number is not reflected in the hardware latency number.\n\n"
-                    "Audio glitches are more common when head-tracking is enabled.");
-            }
+                HelpMarker("To prevent latency, an audio block is dropped if Moonlight's outgoing audio buffer rises above 30ms. This causes an audible glitch.");
 
+                ImGui::Text("Render mode: %s %s %s %s",
+                    metrics.spatialAudio != StreamingPreferences::SAC_DISABLED ?
+                        (metrics.audioPersonalizedHRTF ? "personalized spatial audio" : "spatial audio") : "passthrough",
+                    metrics.spatialAudio == StreamingPreferences::SAC_HEAD_TRACKED ? "with head-tracking for" : "for",
+                    !strcmp(metrics.audioOutputTransportType, "blue") ? "Bluetooth"
+                        : !strcmp(metrics.audioOutputTransportType, "bltn") ? "built-in"
+                        : !strcmp(metrics.audioOutputTransportType, "usb ") ? "USB"
+                        : !strcmp(metrics.audioOutputTransportType, "hdmi") ? "HDMI"
+                        : !strcmp(metrics.audioOutputTransportType, "airp") ? "AirPlay"
+                        : metrics.audioOutputTransportType,
+                    !strcmp(metrics.audioOutputDataSource      , "hdpn") ? "headphones"
+                        : !strcmp(metrics.audioOutputDataSource, "ispk") ? "internal speakers"
+                        : !strcmp(metrics.audioOutputDataSource, "espk") ? "external speakers"
+                        : metrics.audioOutputDataSource);
+                ImGui::Text("Latency: %0.1fms (buffers %.1fms, hardware: %.1fms)",
+                    (metrics.audioTotalSoftwareLatency + metrics.audioOutputHardwareLatency) * 1000.0,
+                    metrics.audioTotalSoftwareLatency * 1000.0, metrics.audioOutputHardwareLatency * 1000.0);
+                if (metrics.spatialAudio != StreamingPreferences::SAC_DISABLED) {
+                    configChanged |= ImGui::Checkbox("Enable head-tracking", &cfg.useHeadTracking);
+                    ImGui::SameLine();
+                    HelpMarker(
+                        "Head-tracking works best when Game Mode is active and Moonlight is running fullscreen. Game Mode reduces Bluetooth latency in AirPods from 160ms to about 80ms, although this number is not reflected in the hardware latency number.\n\n"
+                        "Audio glitches are more common when head-tracking is enabled.");
+                }
+            }
+            else {
+                ImGui::Text("Output: SDL: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
+                ImGui::Text("Audio buffer: %.2fms", metrics.audioInBufferMs);
+                ImGui::Text("Drop count: %d", metrics.audioDropCount);
+                ImGui::SameLine();
+                HelpMarker("To prevent latency, an audio block is dropped if Moonlight's outgoing audio buffer rises above 30ms. This causes an audible glitch.");
+            }
 
             // Live metrics
             ImGui::SeparatorText("Metrics");
@@ -638,9 +652,7 @@ void DevUISettings::Render()
             switch (metrics.presentMode) {
                 case StreamingPreferences::PRESENT_AUTO:  // won't happen
                 case StreamingPreferences::PRESENT_VRR:
-                    ImGui::Text("Mode:                VRR, interval %.3fms",
-                                metrics.presentAfterMinimumDuration * 1000.0);
-                    ImGui::SameLine();
+                    ImGui::Text("Mode:                VRR, min. duration %.3fms", metrics.presentAMDHistory.last * 1000.0);
                     HelpMarker(
                         "VRR mode, which requires borderless fullscreen, delivers frames with varying frametimes "
                         "based on the range of the display.\n"
@@ -671,9 +683,19 @@ void DevUISettings::Render()
             ImGui::Text("Present delay:       %.3f ms", metrics.presentDelayMs.last);
             ImGui::SameLine();
             HelpMarker(
-                "Present delay is the interval between the time a frame is presented and when it hits the display."
+                "How long it takes for a presented frame to actually be shown on screen. Greatly affected by whether we're in composited or direct mode, and whether we're on a fixed refresh or VRR dislpay."
             );
             ImGui::Text("Present interval:    %.3f ms", metrics.presentIntervalMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Present interval is the interval between frames being displayed. This metric is used for the client frametime graph. This will be a multiple of the refresh rate on fixed displays, or a variable value when using VRR."
+            );
+            ImGui::Text("Submitted interval:  %.3f ms", metrics.submittedIntervalMs.last);
+            ImGui::SameLine();
+            HelpMarker(
+                "Submitted interval is the interval between Present being called. Any deviation from the Present Interval may be seen as stutter."
+            );
+
             if (metrics.presentMode == StreamingPreferences::PRESENT_NO_VSYNC) {
                 ImGui::Text("Present accuracy:    %.3f ms", metrics.presentAccuracyMs);
                 ImGui::SameLine();
