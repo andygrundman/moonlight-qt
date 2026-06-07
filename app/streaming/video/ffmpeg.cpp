@@ -2,6 +2,8 @@
 #include "ffmpeg.h"
 #include "utils.h"
 #include "streaming/session.h"
+#include "../../settings/streamingpreferences.h"
+#include "../audio/renderers/sdl.h"
 
 #include <h264_stream.h>
 
@@ -974,6 +976,17 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 
         offset += ret;
     }
+
+    ret = snprintf(&output[offset],
+                   length - offset,
+                   "Audio jitter buffer: %d ms | Queue overflows: %u\n",
+                   StreamingPreferences::get()->audioJitterBufferMs,
+                   SdlAudioRenderer::getQueueOverflowCount());
+    if (ret < 0 || ret >= length - offset) {
+        SDL_assert(false);
+        return;
+    }
+    offset += ret;
 }
 
 void FFmpegVideoDecoder::logVideoStats(VIDEO_STATS& stats, const char* title)

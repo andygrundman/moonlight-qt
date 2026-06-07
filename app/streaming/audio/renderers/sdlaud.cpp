@@ -2,6 +2,8 @@
 
 #include <Limelight.h>
 
+std::atomic<uint32_t> SdlAudioRenderer::s_QueueOverflowCount{0};
+
 SdlAudioRenderer::SdlAudioRenderer(int jitterBufferMs)
     : m_AudioDevice(0),
       m_AudioBuffer(nullptr),
@@ -104,6 +106,7 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
     // Don't queue if there's already more than the configured jitter buffer
     // worth of audio data waiting in Moonlight's pre-decode queue.
     if (LiGetPendingAudioDuration() > m_JitterBufferMs) {
+        s_QueueOverflowCount.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
