@@ -6,7 +6,7 @@
 class SdlAudioRenderer : public IAudioRenderer
 {
 public:
-    SdlAudioRenderer();
+    SdlAudioRenderer(int jitterBufferMs = 30);
 
     virtual ~SdlAudioRenderer();
 
@@ -23,4 +23,5 @@ private:
     void* m_AudioBuffer;
     Uint32 m_FrameSize;
     Uint32 m_FrameDurationMs;
+    int m_JitterBufferMs;
 };

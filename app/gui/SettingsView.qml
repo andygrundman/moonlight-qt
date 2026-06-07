@@ -939,6 +939,30 @@ Flickable {
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Mutes Moonlight's audio when you Alt+Tab out of the stream or click on a different window.")
                 }
+
+                Label {
+                    width: parent.width
+                    text: qsTr("Audio jitter buffer: %1 ms").arg(StreamingPreferences.audioJitterBufferMs)
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("How much audio can queue up before frames are dropped to catch up. Increase if you hear crackling or stuttering on wireless connections.")
+                }
+
+                Slider {
+                    id: audioJitterBufferSlider
+                    width: parent.width
+                    from: 30
+                    to: 150
+                    stepSize: 10
+                    value: StreamingPreferences.audioJitterBufferMs
+                    onValueChanged: {
+                        StreamingPreferences.audioJitterBufferMs = value
+                    }
+                }
             }
         }
 
