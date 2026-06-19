@@ -16,6 +16,7 @@
 CoreAudioRenderer::CoreAudioRenderer()
     : m_SpatialBuffer(2, 4096),
     m_DropCount(0),
+    m_DropCountUnderrun(0),
     m_QueuedAudioSize{0}
 {
     DEBUG_TRACE("CoreAudioRenderer construct");
@@ -94,8 +95,21 @@ void CoreAudioRenderer::statsIncDeviceOverload()
 }
 
 // realtime method
-void CoreAudioRenderer::statsTrackRender(uint64_t startTimeUs, const AudioTimeStamp *inTimestamp, uint32_t inNumberFrames)
+void CoreAudioRenderer::statsTrackRender(uint64_t startTimeUs, const AudioTimeStamp *inTimestamp, uint32_t inNumberFrames, bool didUnderrun)
 {
+    // If no audio is playing, it's normal to get many underruns in a row.
+    // We will only increment the underrun stat for the first empty buffer and
+    // require some audio data before counting it again.
+    static bool seenAudio = true;
+    if (didUnderrun) {
+        if (seenAudio) {
+            ++m_DropCountUnderrun;
+            seenAudio = false;
+        }
+    } else {
+        seenAudio = true;
+    }
+
     // check for lost packets because we weren't called in time, possibly due to system overload
     if (m_LastSampleTime && inTimestamp->mFlags & kAudioTimeStampSampleTimeValid) {
         double expectedSampleTime = m_LastSampleTime + inNumberFrames;
@@ -105,11 +119,11 @@ void CoreAudioRenderer::statsTrackRender(uint64_t startTimeUs, const AudioTimeSt
 
             //m_ActiveWndAudioStats.totalGlitches++;
 
-#ifdef COREAUDIO_DEBUG
-            dispatch_async(dispatch_get_main_queue(), ^{
-                DEBUG_TRACE("[%llu] Error: lost/dropped audio frames: %u (%.02fms)", inTimestamp->mHostTime, lostFrames, lostDuration * 1000.0);
-            });
-#endif
+// #ifdef COREAUDIO_DEBUG
+//             dispatch_async(dispatch_get_main_queue(), ^{
+//                 DEBUG_TRACE("[%llu] Error: lost/dropped audio frames: %u (%.02fms)", inTimestamp->mHostTime, lostFrames, lostDuration * 1000.0);
+//             });
+// #endif
         }
     }
 
@@ -144,6 +158,14 @@ OSStatus renderCallbackDirect(void *inRefCon,
     uint32_t availableBytes;
     float *buffer = (float *)TPCircularBufferTail(&me->m_RingBuffer, &availableBytes);
 
+    // Optionally force a minimum buffer size before playback
+    bool buffering = false;
+    uint32_t channelCount = ioData->mNumberBuffers;
+    float queuedAudioMs = (float)availableBytes / (48 * channelCount * sizeof(float));
+    if (queuedAudioMs < 20.0) {
+        buffering = true;
+    }
+
     if ((int)availableBytes < bytesToCopy) {
         // write silence if not enough buffered data is available
         memset(targetBuffer, 0, bytesToCopy);
@@ -154,7 +176,7 @@ OSStatus renderCallbackDirect(void *inRefCon,
         TPCircularBufferConsume(&me->m_RingBuffer, bytesCopied);
     }
 
-    me->statsTrackRender(start, inTimestamp, inNumberFrames);
+    me->statsTrackRender(start, inTimestamp, inNumberFrames, *ioActionFlags & kAudioUnitRenderAction_OutputIsSilence);
 
     return noErr;
 }
@@ -171,6 +193,16 @@ OSStatus renderCallbackSpatial(void *inRefCon,
     CoreAudioRenderer *me = (CoreAudioRenderer *)inRefCon;
     AudioBufferList *spatialBuffer = me->m_SpatialBuffer.get();
 
+    // SpatialAU's inputCallback can't return a status via ioActionFlags, so we need to track underruns here
+    uint32_t availableBytes;
+    TPCircularBufferTail(&me->m_RingBuffer, &availableBytes);
+    uint32_t channelCount = ioData->mNumberBuffers;
+    uint32_t wantedBytes  = channelCount * inNumberFrames * sizeof(float);
+    bool didUnderrun = false;
+    if (availableBytes < wantedBytes) {
+        didUnderrun = true;
+    }
+
     // Set the byte size with the output audio buffer list.
     for (uint32_t i = 0; i < spatialBuffer->mNumberBuffers; i++) {
         spatialBuffer->mBuffers[i].mDataByteSize = inNumberFrames * 4;
@@ -184,7 +216,7 @@ OSStatus renderCallbackSpatial(void *inRefCon,
         memcpy(ioData->mBuffers[i].mData, spatialBuffer->mBuffers[i].mData, inNumberFrames * sizeof(float));
     }
 
-    me->statsTrackRender(start, inTimestamp, inNumberFrames);
+    me->statsTrackRender(start, inTimestamp, inNumberFrames, didUnderrun);
 
     return noErr;
 }
@@ -288,7 +320,7 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
         metrics.audioFrameDurationMs = m_AudioPacketDuration * 1000;
         metrics.audioSampleRate = m_OutputASBD.mSampleRate;
         metrics.audioChannels = m_OutputASBD.mChannelsPerFrame;
-        metrics.spatialAudio = m_Spatial;
+        metrics.spatialAudioActive = m_Spatial;
         metrics.audioPersonalizedHRTF = m_SpatialAU.m_PersonalizedHRTF;
         metrics.audioHeadTracking = m_SpatialAU.getHeadTracking();
         strncpy(metrics.audioOutputTransportType, m_OutputTransportType, 5);
@@ -303,8 +335,14 @@ bool CoreAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION*
 void CoreAudioRenderer::updateMetrics()
 {
     DevUISettings::instance().UpdateMetrics([&](DevUIMetrics& metrics) {
-        metrics.audioDropCount = m_DropCount;
-        metrics.audioInBufferMs = ((float)m_QueuedAudioSize.load() / (sizeof(float) * m_opusConfig->channelCount)) * m_AudioPacketDuration;
+        metrics.audioDropCount += m_DropCount;
+        metrics.audioDropCountUnderrun += m_DropCountUnderrun;
+        int bytesPerMs = (m_OutputASBD.mSampleRate * m_opusConfig->channelCount * sizeof(float)) / 1000;
+        metrics.audioInBufferMs = (float)m_QueuedAudioSize.load() / bytesPerMs;
+
+        // Let DevUI reset the counters to 0
+        m_DropCount = 0;
+        m_DropCountUnderrun = 0;
     });
 }
 
@@ -652,7 +690,7 @@ bool CoreAudioRenderer::submitAudio(int bytesWritten)
     }
 
     // drop packet if we've fallen behind Moonlight's queue by at least 30 ms
-    if (LiGetPendingAudioDuration() > 30) {
+    if (LiGetPendingAudioDuration() > 60) {
         ++m_DropCount;
         return true;
     }

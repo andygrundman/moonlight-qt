@@ -177,12 +177,12 @@ Column {
             function createModel() {
                 var model = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', root, '')
 
-                if (Qt.platform.os !== "osx") {
+                //if (Qt.platform.os !== "osx") {
                     model.append({
                         text: qsTr("Fullscreen"),
                         val: StreamingPreferences.WM_FULLSCREEN
                     })
-                }
+                //}
 
                 model.append({
                     text: qsTr("Borderless windowed"),

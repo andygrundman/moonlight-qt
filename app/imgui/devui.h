@@ -86,7 +86,7 @@ struct DevUIConfig {
     float referenceWhite = 203.0f;
     float minNits = 0.0f;
     float maxNits = 0.0f;
-    int spatialAudio = StreamingPreferences::SAC_DISABLED;
+    int spatialAudioConfig = StreamingPreferences::SAC_DISABLED;
     bool useHeadTracking = false;
 #endif
 };
@@ -116,7 +116,6 @@ struct DevUIMetrics {
     RunningStat presentDelayMs = {};
     RunningStat presentIntervalMs = {};
     RunningStat presentAMDHistory = {};
-    RunningStat submittedIntervalMs = {};
     double presentAccuracyMs = 0.0;
     float streamFps = 0.0;
     float displayHz = 0.0;
@@ -137,7 +136,7 @@ struct DevUIMetrics {
     int audioFrameDurationMs = 10;
     int opusChannelCount = 2;
     int audioChannels = 2;
-    int spatialAudio = StreamingPreferences::SAC_DISABLED;
+    bool spatialAudioActive = false;
     bool audioPersonalizedHRTF = false;
     bool audioHeadTracking = false;
     char audioOutputTransportType[5] = {};
@@ -145,6 +144,7 @@ struct DevUIMetrics {
     double audioTotalSoftwareLatency = 0.0;
     double audioOutputHardwareLatency = 0.0;
     int audioDropCount = 0;
+    int audioDropCountUnderrun = 0;
     float audioInBufferMs = 0.0;
 
     void reset()
@@ -172,6 +172,7 @@ struct DevUIMetrics {
         presentAMDHistory.reset();
 
         audioDropCount = 0;
+        audioDropCountUnderrun = 0;
     }
 };
 
@@ -205,11 +206,6 @@ class DevUISettings
 
     template<typename Fn> void UpdateMetrics(Fn&& cb)
     {
-        // metrics callbacks only need to run if panel is open
-        if (!m_panelOpen || !m_Enabled.load()) {
-            return;
-        }
-
         std::lock_guard<std::mutex> lock(m_Mutex);
         cb(m_Metrics);
     }
