@@ -154,7 +154,14 @@ OSStatus inputCallback(void *inRefCon,
 
     // Total size of interleaved PCM for all channels
     uint32_t channelCount = ioData->mNumberBuffers;
-    uint32_t wantedBytes  = channelCount * inNumberFrames * 4;
+    uint32_t wantedBytes  = channelCount * inNumberFrames * sizeof(float);
+
+    // Optionally force a minimum buffer size before playback
+    bool buffering = false;
+    float queuedAudioMs = (float)availableBytes / (48 * channelCount * sizeof(float));
+    if (queuedAudioMs < 20.0) {
+        buffering = true;
+    }
 
     if (availableBytes < wantedBytes) {
         // not enough data for all channels, note we are sending back a zeroed-out buffer
