@@ -764,7 +764,7 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
             // Prefer the libplacebo (on MoltenVK) renderer unless explicitly opted out
 #ifdef HAVE_LIBPLACEBO_VULKAN
-            if (params->renderer == StreamingPreferences::RS_AUTO || params->renderer == StreamingPreferences::RS_VULKAN) {
+            if (params->renderer == StreamingPreferences::RS_VULKAN) {
                 return new PlVkRenderer(hwDecodeCfg->device_type);
             }
 #endif
@@ -773,6 +773,7 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
             }
             else {
                 // This covers both Metal explicitly selected and probe-only (since Metal is cheap to instantiate)
+                // Also covers RS_AUTO in this branch
                 return VTMetalRendererFactory::createRenderer(true);
             }
 #endif
@@ -824,8 +825,8 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
 #endif
 #ifdef Q_OS_DARWIN
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
-            // Use the older AVSampleBufferDisplayLayer if Metal cannot be used
-            return VTRendererFactory::createRenderer();
+            // Metal renderer is tried second
+            return VTMetalRendererFactory::createRenderer(true);
 #endif
 #ifdef HAVE_LIBVA
         case AV_HWDEVICE_TYPE_VAAPI:
@@ -848,7 +849,11 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
         case AV_HWDEVICE_TYPE_VAAPI:
         case AV_HWDEVICE_TYPE_DXVA2:
         case AV_HWDEVICE_TYPE_QSV: // Covered by VAAPI and D3D11VA/DXVA2
+#ifdef Q_OS_DARWIN
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
+            // Use the older AVSampleBufferDisplayLayer if Metal cannot be used
+            return VTRendererFactory::createRenderer();
+#endif
         case AV_HWDEVICE_TYPE_D3D11VA:
         case AV_HWDEVICE_TYPE_DRM:
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(56, 39, 100)
