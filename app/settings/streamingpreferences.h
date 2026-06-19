@@ -127,6 +127,7 @@ public:
     {
         RENDERER_VT_METAL = 0,
         RENDERER_AVSAMPLEBUFFER = 1,
+        RENDERER_VULKAN = 2,
     };
     Q_ENUM(Renderer)
 

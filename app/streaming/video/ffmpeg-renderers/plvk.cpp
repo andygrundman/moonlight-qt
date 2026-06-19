@@ -358,6 +358,14 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         return false;
     }
 
+#ifdef Q_OS_DARWIN
+    // Mac users need to chooose Vulkan in settings
+    StreamingPreferences *prefs = StreamingPreferences::get();
+    if (prefs->renderer != StreamingPreferences::RENDERER_VULKAN) {
+        return false;
+    }
+#endif
+
     pl_vulkan_params vkParams = pl_vulkan_default_params;
     vkParams.instance = m_PlVkInstance->instance;
     vkParams.get_proc_addr = m_PlVkInstance->get_proc_addr;
