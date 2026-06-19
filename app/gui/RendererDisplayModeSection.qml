@@ -71,6 +71,11 @@ Column {
                 }
 
                 ListElement {
+                    text: qsTr("Vulkan (MoltenVK)")
+                    val: StreamingPreferences.RENDERER_VULKAN
+                }
+
+                ListElement {
                     text: qsTr("AVSampleBuffer")
                     val: StreamingPreferences.RENDERER_AVSAMPLEBUFFER
                 }
