@@ -1560,10 +1560,8 @@ void Session::updateOptimalWindowDisplayMode()
     SDL_SetWindowDisplayMode(m_Window, &bestMode);
 }
 
-void Session::toggleFullscreen()
+void Session::setWindowMode(uint32_t windowMode)
 {
-    bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
-
 #if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
     // Destroy the video decoder before toggling full-screen because D3D9 can try
     // to put the window back into full-screen before we've managed to destroy
@@ -1579,14 +1577,29 @@ void Session::toggleFullscreen()
     SDL_UnlockMutex(m_DecoderLock);
 #endif
 
+    uint32_t sdlWindowMode = 0;
+    switch (windowMode) {
+        case StreamingPreferences::WM_FULLSCREEN:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Switching to SDL window mode SDL_WINDOW_FULLSCREEN");
+            sdlWindowMode = SDL_WINDOW_FULLSCREEN;
+            break;
+        case StreamingPreferences::WM_FULLSCREEN_DESKTOP:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Switching to SDL window mode SDL_WINDOW_FULLSCREEN_DESKTOP");
+            sdlWindowMode = SDL_WINDOW_FULLSCREEN_DESKTOP;
+            break;
+        case StreamingPreferences::WM_WINDOWED:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Switching to SDL windowed mode");
+            break;
+    }
+
     // Actually enter/leave fullscreen
-    SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
+    SDL_SetWindowFullscreen(m_Window, sdlWindowMode);
 
 #ifdef Q_OS_DARWIN
     // SDL on macOS has a bug that causes the window size to be reset to crazy
     // large dimensions when exiting out of true fullscreen mode. We can work
     // around the issue by manually resetting the position and size here.
-    if (!fullScreen && m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
+    if (windowMode == StreamingPreferences::WM_WINDOWED && m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
         int x, y, width, height;
         getWindowDimensions(x, y, width, height);
         SDL_SetWindowSize(m_Window, width, height);
@@ -1599,6 +1612,21 @@ void Session::toggleFullscreen()
 
     // Input handler might need stop/stop mouse grab after changing modes
     m_InputHandler->updatePointerRegionLock();
+}
+
+void Session::toggleFullscreen()
+{
+    // Swap between windowed mode and the recommended fullscreen mode
+    bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
+
+    uint32_t targetWindowMode = StreamingPreferences::WM_WINDOWED;
+    if (fullScreen) {
+        targetWindowMode = m_FullScreenFlag == SDL_WINDOW_FULLSCREEN
+            ? StreamingPreferences::WM_FULLSCREEN
+            : StreamingPreferences::WM_FULLSCREEN_DESKTOP;
+    }
+
+    setWindowMode(targetWindowMode);
 }
 
 void Session::notifyMouseEmulationMode(bool enabled)
@@ -2106,8 +2134,8 @@ void Session::exec()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
-            case SDL_CODE_TOGGLE_FULLSCREEN:
-                toggleFullscreen();
+            case SDL_CODE_SET_WINDOW_MODE:
+                setWindowMode((uint32_t)(uintptr_t)event.user.data1);
                 break;
             default:
                 SDL_assert(false);

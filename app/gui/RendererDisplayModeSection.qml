@@ -236,8 +236,6 @@ Column {
             Layout.fillWidth: true
             hoverEnabled: true
             textRole: "text"
-            enabled: !rendererComboBox.visible ||
-                     StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
 
             model: ListModel {
                 id: framePacingListModel
@@ -305,8 +303,7 @@ Column {
             text: qsTr("Show performance graphs")
             font.pointSize: 12
             checked: StreamingPreferences.showPerformanceGraphs
-            enabled: !rendererComboBox.visible ||
-                        StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
+            enabled: StreamingPreferences.renderer === StreamingPreferences.RENDERER_VT_METAL
 
             onCheckedChanged: {
                 StreamingPreferences.showPerformanceGraphs = checked
