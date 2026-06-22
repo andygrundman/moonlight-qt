@@ -106,11 +106,11 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
                     old.windowMode,
                     config.windowMode);
 
-        // toggleFullscreen() will recreate the decoder which is running us!
-        // so use an SDL event instead
+        // We have to let session.cpp handle the mode, because it needs to recreate the decoder
         SDL_Event event;
         event.type = SDL_USEREVENT;
-        event.user.code = SDL_CODE_TOGGLE_FULLSCREEN;
+        event.user.code = SDL_CODE_SET_WINDOW_MODE;
+        event.user.data1 = (void*)(uintptr_t)config.windowMode;
         SDL_PushEvent(&event);
     }
 
@@ -392,25 +392,10 @@ void DevUISettings::Render()
                 "shows new or repeated frames based on PTS timestamps."
             );
 
-            // Because we're ignoring windowMode=0 (Fullscreen) we have to manually handle the combo
             ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
-            static const char* windowModeItems[] = {"Borderless Fullscreen", "Windowed"};
-            static int wm_selected_idx = std::clamp(cfg.windowMode - 1, 0, 1);
-            const char* windowModeValue = windowModeItems[wm_selected_idx];
-            if (ImGui::BeginCombo("Window mode", windowModeValue, 0)) {
-                for (int n = 0; n < IM_COUNTOF(windowModeItems); n++) {
-                    const bool is_selected = (wm_selected_idx == n);
-                    if (ImGui::Selectable(windowModeItems[n], is_selected)) {
-                        wm_selected_idx = n;
-                        cfg.windowMode = n + 1;
-                        configChanged = true;
-                    }
-                    if (is_selected) {
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                ImGui::EndCombo();
-            }
+            static const char* windowModeItems[] = {"Fullscreen Exclusive", "Borderless Fullscreen", "Windowed"};
+            configChanged |=
+                ImGui::Combo("Window mode", &cfg.windowMode, windowModeItems, IM_ARRAYSIZE(windowModeItems));
 
             ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
             static const char* presentModeItems[] = {
@@ -502,30 +487,31 @@ void DevUISettings::Render()
                 ImGui::ShowDemoWindow(&show_demo_window);
             }
 
-        #ifdef __APPLE__
-            if (ImGui::CollapsingHeader("HDR")) {
-                ImGui::Text("EDR headroom: %.1fx SDR", metrics.currentEDR);
+        // This HDR stuff is pretty half-baked and not very useful at the moment
+        // #ifdef __APPLE__
+        //     if (ImGui::CollapsingHeader("HDR")) {
+        //         ImGui::Text("EDR headroom: %.1fx SDR", metrics.currentEDR);
 
-                ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
-                if (cfg.isReferenceModeDisplay) ImGui::BeginDisabled(); // reference mode uses 100 nits
-                configChanged |= ImGui::SliderFloat("Reference/SDR White", &cfg.referenceWhite, 100.0f, 203.0f, "%.1f nits");
-                ImGui::SameLine();
-                HelpMarker("This value represents SDR peak white. If your display is in reference mode (such as MacBook Pro's 'HDR Video' preset), SDR peak is 100 nits. In other modes, 203 nits is the default.");
-                if (cfg.isReferenceModeDisplay) ImGui::EndDisabled();
+        //         ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+        //         if (cfg.isReferenceModeDisplay) ImGui::BeginDisabled(); // reference mode uses 100 nits
+        //         configChanged |= ImGui::SliderFloat("Reference/SDR White", &cfg.referenceWhite, 100.0f, 203.0f, "%.1f nits");
+        //         ImGui::SameLine();
+        //         HelpMarker("This value represents SDR peak white. If your display is in reference mode (such as MacBook Pro's 'HDR Video' preset), SDR peak is 100 nits. In other modes, 203 nits is the default.");
+        //         if (cfg.isReferenceModeDisplay) ImGui::EndDisabled();
 
-                ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
-                configChanged |= ImGui::SliderFloat("Min Luminance", &cfg.minNits, 0.0f, 6.5535f, "%.4f nits");
+        //         ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+        //         configChanged |= ImGui::SliderFloat("Min Luminance", &cfg.minNits, 0.0f, 6.5535f, "%.4f nits");
 
-                ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
-                configChanged |= ImGui::SliderFloat("Max Luminance", &cfg.maxNits, 1.0f, 10000.0f, "%.2f nits");
+        //         ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x * 0.5f);
+        //         configChanged |= ImGui::SliderFloat("Max Luminance", &cfg.maxNits, 1.0f, 10000.0f, "%.2f nits");
 
-                configChanged |= ImGui::Checkbox("Enable EDR tone-mapping (experimental)", &cfg.useEDR);
-                ImGui::SameLine();
-                HelpMarker(
-                    "macOS will render HDR content according to your current display brightness and display preset. HDR will be tone-mapped to SDR when viewed on a non-HDR display.\n\n"
-                    "If disabled, HDR is rendered at its native brightness.");
-            }
-        #endif
+        //         configChanged |= ImGui::Checkbox("Enable EDR tone-mapping (experimental)", &cfg.useEDR);
+        //         ImGui::SameLine();
+        //         HelpMarker(
+        //             "macOS will render HDR content according to your current display brightness and display preset. HDR will be tone-mapped to SDR when viewed on a non-HDR display.\n\n"
+        //             "If disabled, HDR is rendered at its native brightness.");
+        //     }
+        // #endif
 
             if (ImGui::CollapsingHeader("Audio")) {
                 if (Session::get()->getAudioRenderer() != nullptr) {
