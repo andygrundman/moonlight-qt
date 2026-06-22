@@ -17,7 +17,7 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
-#define SDL_CODE_TOGGLE_FULLSCREEN 106
+#define SDL_CODE_SET_WINDOW_MODE 106
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -144,6 +144,8 @@ public:
     void setShouldExit(bool quitHostApp = false);
 
     void toggleMouseEmulation(SDL_JoystickID jsid);
+
+    void setWindowMode(uint32_t windowMode);
 
     void toggleFullscreen();
 
