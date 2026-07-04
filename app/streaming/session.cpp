@@ -15,6 +15,10 @@
 #include "video/slvid.h"
 #endif
 
+#ifdef HAVE_PYROWAVE
+#include "video/pyrowave.h"
+#endif
+
 #ifdef Q_OS_WIN32
 // Scaling the icon down on Win32 looks dreadful, so render at lower res
 #define ICON_SIZE 32
@@ -299,6 +303,23 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "V-sync %s",
                 enableVsync ? "enabled" : "disabled");
+
+#ifdef HAVE_PYROWAVE
+    if (videoFormat == VIDEO_FORMAT_PYROWAVE) {
+        chosenDecoder = new PyroWaveVideoDecoder(testOnly);
+        if (chosenDecoder->initialize(&params)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "PyroWave video decoder chosen");
+            return true;
+        }
+        else {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Unable to load PyroWave decoder");
+            delete chosenDecoder;
+            chosenDecoder = nullptr;
+        }
+    }
+#endif
 
 #ifdef HAVE_SLVIDEO
     chosenDecoder = new SLVideoDecoder(testOnly);
@@ -714,6 +735,10 @@ bool Session::initialize(QQuickWindow* qtWindow)
                 CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(m_StreamConfig.audioConfiguration));
 
     // Start with all codecs and profiles in priority order
+#ifdef HAVE_PYROWAVE
+    // PyroWave (intra-only, low latency) is preferred when both ends support it.
+    m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE);
+#endif
     m_SupportedVideoFormats.append(VIDEO_FORMAT_AV1_HIGH10_444);
     m_SupportedVideoFormats.append(VIDEO_FORMAT_AV1_MAIN10);
     m_SupportedVideoFormats.append(VIDEO_FORMAT_H265_REXT10_444);
@@ -729,6 +754,20 @@ bool Session::initialize(QQuickWindow* qtWindow)
     {
     case StreamingPreferences::VCC_AUTO:
     {
+#ifdef HAVE_PYROWAVE
+        // PyroWave is offered (at top priority) only if this client can actually decode it; if not,
+        // drop it so Automatic falls back to the conventional codecs. When both ends support it, it
+        // wins on merit (intra-only, sub-ms latency).
+        if (getDecoderAvailability(testWindow,
+                                   m_Preferences->videoDecoderSelection,
+                                   VIDEO_FORMAT_PYROWAVE,
+                                   m_StreamConfig.width,
+                                   m_StreamConfig.height,
+                                   m_StreamConfig.fps) == DecoderAvailability::None) {
+            m_SupportedVideoFormats.removeByMask(VIDEO_FORMAT_MASK_PYROWAVE);
+        }
+#endif
+
         // Codecs are checked in order of ascending decode complexity to ensure
         // the the deprioritized list prefers lighter codecs for software decoding
 
@@ -834,6 +873,10 @@ bool Session::initialize(QQuickWindow* qtWindow)
 #endif
         break;
     }
+    case StreamingPreferences::VCC_FORCE_PYROWAVE:
+        // PyroWave has no fallback codec; forcing it requires host + client support.
+        m_SupportedVideoFormats.removeByMask(~VIDEO_FORMAT_MASK_PYROWAVE);
+        break;
     case StreamingPreferences::VCC_FORCE_H264:
         m_SupportedVideoFormats.removeByMask(~VIDEO_FORMAT_MASK_H264);
         break;

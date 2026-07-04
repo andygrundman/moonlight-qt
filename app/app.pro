@@ -263,6 +263,26 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/swframemapper.h \
         streaming/video/ffmpeg-renderers/pacer/pacer.h
 }
+# PyroWave (Vulkan wavelet, intra-only) decoder. Off by default; enable with CONFIG+=pyrowave.
+# Requires the pyrowave submodule built via its own CMake (produces libpyrowave-shared) with
+# Granite fetched (pyrowave/checkout_granite.sh). See plan/docs for the build recipe.
+pyrowave {
+    message(PyroWave decoder selected)
+
+    DEFINES += HAVE_PYROWAVE
+
+    # PyroWave C API + Vulkan headers, both vendored under the pyrowave submodule.
+    INCLUDEPATH += $$PWD/../pyrowave
+    INCLUDEPATH += $$PWD/../pyrowave/Granite/third_party/khronos/vulkan-headers/include
+
+    SOURCES += streaming/video/pyrowave.cpp
+    HEADERS += streaming/video/pyrowave.h
+
+    # Link the PyroWave C API shared library (built via CMake into pyrowave/build) + Vulkan loader.
+    LIBS += -L$$PWD/../pyrowave/build -lpyrowave-shared -lvulkan
+    # Bake the shared-lib location into the runtime search path.
+    QMAKE_RPATHDIR += $$PWD/../pyrowave/build
+}
 libva {
     message(VAAPI renderer selected)
 

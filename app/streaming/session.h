@@ -72,6 +72,7 @@ public:
             {SCM_AV1_MAIN10, VIDEO_FORMAT_AV1_MAIN10},
             {SCM_AV1_HIGH8_444, VIDEO_FORMAT_AV1_HIGH8_444},
             {SCM_AV1_HIGH10_444, VIDEO_FORMAT_AV1_HIGH10_444},
+            {SCM_PYROWAVE, VIDEO_FORMAT_PYROWAVE},
         };
 
         for (QMap<int, int>::const_iterator it = mapping.cbegin(); it != mapping.cend(); ++it) {
