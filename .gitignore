@@ -7,3 +7,21 @@ build/
 libs/
 config.tests/*/.qmake.stash
 config.tests/*/Makefile
+
+# In-tree qmake build output
+.qmake.cache
+.qmake.stash
+Makefile
+Makefile.Debug
+Makefile.Release
+*/Makefile
+*/Makefile.Debug
+*/Makefile.Release
+release/
+debug/
+*.o
+*.a
+config.log
+config.tests/*/*.o
+config.tests/EGL/EGL
+/app/moonlight
