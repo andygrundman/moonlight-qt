@@ -128,6 +128,7 @@ public:
         RENDERER_VT_METAL = 0,
         RENDERER_AVSAMPLEBUFFER = 1,
         RENDERER_VULKAN = 2,
+        RENDERER_D3D11 = 3,
     };
     Q_ENUM(Renderer)
 

@@ -46,12 +46,9 @@ public:
     virtual bool isAsync() = 0;
 
     // Optional method called before destruction
-    virtual void stop() = 0;
-
-    // Call this method after receiving m_VsyncSignalled or after
-    // waitForVsync() returns to obtain the remaining time in the current
-    // vblank interval. A negative value means the interval was missed.
-    virtual double remainingMilliseconds() = 0;
+    virtual void stop() {
+        // nothing
+    }
 
     virtual void waitForVsync() {
         // Synchronous sources must implement waitForVsync()!
@@ -64,8 +61,11 @@ public:
     virtual ~IFramePacer() = default;
     virtual void submitFrame(AVFrame* frame) = 0;
     virtual bool initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS params) = 0;
-    virtual void signalVsync() { };
-    virtual void signalVsyncTS(double, double) { };
+    virtual void signalVsync() {
+        SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Calls to signalVsync() must switch to signalVsyncTS");
+        SDL_assert(false);
+    }
+    virtual void signalVsyncTS(double, double) = 0;
     virtual bool renderOnMainThread() = 0;
 };
 

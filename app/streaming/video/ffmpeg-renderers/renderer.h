@@ -508,7 +508,8 @@ public:
     }
 
     // On some platforms like macOS, the renderer can be notified about the
-    // current and next vsync timestamps
+    // current and next vsync timestamps. Other platforms may only supply a timestamp (Wayland).
+    // In this case set deadline to -1.0.
     virtual void notifyVsyncTimestamps(double timestamp, double deadline) {
         (void)timestamp;
         (void)deadline;

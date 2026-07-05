@@ -358,8 +358,8 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
         return false;
     }
 
-#ifdef Q_OS_DARWIN
-    // Mac users need to chooose Vulkan in settings
+#if defined(Q_OS_DARWIN) || defined(Q_OS_WIN32)
+    // Mac/Win users need to chooose Vulkan in settings
     StreamingPreferences *prefs = StreamingPreferences::get();
     if (prefs->renderer != StreamingPreferences::RENDERER_VULKAN) {
         return false;

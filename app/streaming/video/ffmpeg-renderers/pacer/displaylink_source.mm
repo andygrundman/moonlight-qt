@@ -91,15 +91,7 @@ void DisplayLinkSource::displayLinkUpdate(double timestamp, double targetTimesta
 {
     std::lock_guard<std::mutex> lock(m_mtx);
     m_TargetTimestamp.store(targetTimestamp);
-
-    FramePacer::instance().signalVsync();
     FramePacer::instance().signalVsyncTS(timestamp, targetTimestamp);
-}
-
-double DisplayLinkSource::remainingMilliseconds()
-{
-    const double targetTimestamp = m_TargetTimestamp.load();
-    return (targetTimestamp - CACurrentMediaTime()) * 1000.0;
 }
 
 ///////

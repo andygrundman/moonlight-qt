@@ -34,6 +34,11 @@ HEADERS += \
     $$PWD/implot/implot_internal.h
 
 win32 {
+    SOURCES += \
+        $$PWD/imgui/backends/imgui_impl_dx11.cpp
+    HEADERS += \
+        $$PWD/imgui/backends/imgui_impl_dx11.h
+
     contains(QT_ARCH, x86_64) {
         LIBS += -L$$PWD/../libs/windows/lib/x64
         INCLUDEPATH += $$PWD/../libs/windows/include/x64 $$PWD/../libs/windows/include/x64/SDL2

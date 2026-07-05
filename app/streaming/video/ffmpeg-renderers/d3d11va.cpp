@@ -1,6 +1,11 @@
 // For D3D11_DECODER_PROFILE values
 #include <initguid.h>
 
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_dx11.h"
+#include "implot.h"
+
 #include "d3d11va.h"
 #include "dxutil.h"
 #include "path.h"
@@ -8,6 +13,12 @@
 
 #include "streaming/streamutils.h"
 #include "streaming/session.h"
+#include "framepacing/framequeue.h"
+#include "framepacing/framepacer.h"
+#include "imgui/devui.h"
+#include "imgui/gamepadmenu.h"
+#include "imgui/imgui_plots.h"
+#include "streaming/stats.h"
 
 #include <SDL_syswm.h>
 
@@ -60,6 +71,7 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
       m_DecoderSelectionPass(decoderSelectionPass),
       m_DevicesWithFL11Support(0),
       m_DevicesWithCodecSupport(0),
+      m_Window(nullptr),
       m_LastColorTrc(AVCOL_TRC_UNSPECIFIED),
       m_AllowTearing(false),
       m_OverlayLock(0),
@@ -130,6 +142,20 @@ D3D11VARenderer::~D3D11VARenderer()
     m_RenderDeviceContext.Reset();
     m_Factory.Reset();
 }
+
+#ifndef IMGUI_DISABLE
+void D3D11VARenderer::ImGui_initBackend()
+{
+    ImGui_ImplSDL2_InitForD3D(m_Window);
+    ImGui_ImplDX11_Init(m_RenderDevice.Get(), m_RenderDeviceContext.Get());
+}
+
+void D3D11VARenderer::ImGui_deinitBackend()
+{
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+}
+#endif
 
 bool D3D11VARenderer::createSharedFencePair(UINT64 initialValue, ID3D11Device5* dev1, ID3D11Device5* dev2, ComPtr<ID3D11Fence>& dev1Fence, ComPtr<ID3D11Fence>& dev2Fence)
 {
@@ -609,6 +635,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
     SDL_VERSION(&info.version);
     SDL_GetWindowWMInfo(params->window, &info);
     SDL_assert(info.subsystem == SDL_SYSWM_WINDOWS);
+    m_Window = params->window;
 
     // Always use windowed or borderless windowed mode.. SDL does mode-setting for us in
     // full-screen exclusive mode (SDL_WINDOW_FULLSCREEN), so this actually works out okay.
@@ -762,6 +789,32 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         renderOverlay((Overlay::OverlayType)i);
     }
+
+#ifndef IMGUI_DISABLE
+    // avoid a crash at shutdown due to ImGui calling SDL
+    // TODO; refactor this out to a parent class
+    if (!FramePacer::instance().stopping()) {
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+
+        // Dockspace is cool but overkill
+        //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+
+        DisplayOutputFormat outputFormat =
+            frame->color_trc == AVCOL_TRC_SMPTE2084 ? OUTPUT_IS_PQ
+            : OUTPUT_IS_SDR;
+        DevUIColors.InitColors(outputFormat);
+
+        Stats::instance().RenderGraphs();
+        DevUISettings::instance().Render();
+        GamepadMenu::instance().Render();
+
+        ImGui::EndFrame();
+        ImGui::Render();
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    }
+#endif
 
     UINT flags;
 

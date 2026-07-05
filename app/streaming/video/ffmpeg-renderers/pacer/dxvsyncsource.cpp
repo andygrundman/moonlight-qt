@@ -4,8 +4,7 @@
 // https://bugs.chromium.org/p/chromium/issues/detail?id=467617
 // https://chromium.googlesource.com/chromium/src.git/+/c564f2fe339b2b2abb0c8773c90c83215670ea71/gpu/ipc/service/gpu_vsync_provider_win.cc
 
-DxVsyncSource::DxVsyncSource(IFramePacer* pacer) :
-    m_Pacer(pacer),
+DxVsyncSource::DxVsyncSource() :
     m_Gdi32Handle(nullptr),
     m_LastMonitor(nullptr)
 {
