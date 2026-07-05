@@ -66,7 +66,8 @@ public:
         RS_AUTO,
         RS_VULKAN,
         RS_METAL,
-        RS_AVSBDL
+        RS_AVSBDL,
+        RS_D3D11
     };
     Q_ENUM(RendererSelection)
 

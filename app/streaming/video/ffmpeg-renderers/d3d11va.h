@@ -27,6 +27,11 @@ public:
     virtual int getDecoderCapabilities() override;
     virtual InitFailureReason getInitFailureReason() override;
 
+#ifndef IMGUI_DISABLE
+    virtual void ImGui_initBackend() override;
+    virtual void ImGui_deinitBackend() override;
+#endif
+
     enum PixelShaders {
         GENERIC_YUV_420,
         GENERIC_AYUV,
@@ -70,6 +75,7 @@ private:
     bool m_DebugLayer;
     Microsoft::WRL::ComPtr<IDXGIFactory5> m_Factory;
     int m_AdapterIndex;
+    SDL_Window* m_Window;
     Microsoft::WRL::ComPtr<ID3D11Device5> m_RenderDevice, m_DecodeDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext4> m_RenderDeviceContext, m_DecodeDeviceContext;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_RenderSharedTextureArray;

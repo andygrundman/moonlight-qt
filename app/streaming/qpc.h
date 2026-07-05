@@ -4,9 +4,15 @@
 // but is mapped through SDL to the highest resolution timer available on each platform.
 
 #include "SDL_compat.h"
+
+#if defined(_MSC_VER)
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#else
 #include <time.h>
 #include <errno.h>
 #include <sched.h>
+#endif
 
 // Time helpers
 static inline uint64_t QpcFreq() {
@@ -51,16 +57,20 @@ static inline uint64_t MsToQpc(double ms) {
     return UsToQpc(us);
 }
 
-static inline void YieldCPU()
-{
-#if defined(__aarch64__) || defined(__arm64__)
-	__asm__ __volatile__("yield");
-#elif defined(__x86_64__) || defined(__i386__)
-	__asm__ __volatile__("pause");
+#if defined(_MSC_VER)
+	#define YieldCPU YieldProcessor
 #else
-	// no-op fallback
+	static inline void YieldCPU()
+	{
+	#if defined(__aarch64__) || defined(__arm64__)
+		__asm__ __volatile__("yield");
+	#elif defined(__x86_64__) || defined(__i386__)
+		__asm__ __volatile__("pause");
+	#else
+		// no-op fallback
+	#endif
+	}
 #endif
-}
 
 // Sleep until approximately targetQpc, then busy-wait the rest.
 // slackQpc is how early to stop sleeping.
@@ -78,8 +88,13 @@ static inline void SleepUntilQpc(uint64_t targetQpc,
 		const uint64_t remainQpc = targetQpc - now;
 		if (remainQpc > sleepSlackQpc) {
 			const uint64_t sleepQpc = remainQpc - sleepSlackQpc;
-			const uint64_t totalNs = QpcToUs(sleepQpc) * 1000ULL;
 
+		#if defined(_MSC_VER)
+			const int64_t f = QpcFreq();
+			DWORD ms = (DWORD)((sleepQpc * 1000 + f / 2) / f);
+			Sleep(ms);
+		#else
+			const uint64_t totalNs = QpcToUs(sleepQpc) * 1000ULL;
 			struct timespec ts;
 			ts.tv_sec = (time_t)(totalNs / 1000000000ULL);
 			ts.tv_nsec = (long)(totalNs % 1000000000ULL);
@@ -87,6 +102,7 @@ static inline void SleepUntilQpc(uint64_t targetQpc,
 			if (ts.tv_sec > 0 || ts.tv_nsec > 0) {
 				while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
 			}
+		#endif
 			continue;
 		}
 

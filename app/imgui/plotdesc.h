@@ -2,6 +2,7 @@
 
 #pragma once
 #include <array>
+#include <limits>
 
 enum PlotType {
     PLOT_FRAMETIME = 0,

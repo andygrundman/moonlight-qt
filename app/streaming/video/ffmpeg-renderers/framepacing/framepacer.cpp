@@ -17,9 +17,8 @@ extern "C"
 
 #ifdef Q_OS_WIN32
     #define WIN32_LEAN_AND_MEAN
-    #include "../pacer/dxvsyncsource.h"
-
     #include <Windows.h>
+    #include "../pacer/dxvsyncsource.h"
 #endif
 
 #ifdef HAS_WAYLAND
@@ -648,8 +647,26 @@ void FramePacer::submitFrame(AVFrame* frame)
 
 int FramePacer::vsyncThread(void* context)
 {
+    FramePacer* me = reinterpret_cast<FramePacer*>(context);
+
     if (SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH) < 0) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Unable to set vsync thread to high priority: %s", SDL_GetError());
+    }
+
+    bool async = me->m_VsyncSource->isAsync();
+    while (!me->stopping()) {
+        if (async) {
+            // Wait for the VSync source to invoke signalVsyncTS()
+            me->waitUntilVsync();
+        }
+        else {
+            // Let the VSync source wait in the context of our thread
+            me->m_VsyncSource->waitForVsync();
+        }
+
+        if (me->stopping()) {
+            break;
+        }
     }
 
     // XXX vsync thread should update:
@@ -662,7 +679,7 @@ int FramePacer::vsyncThread(void* context)
     // Win32 D3D: use GetFrameStatistics() to look at recent frame data
     // Mac: DisplayLink callback provides timestamps
 
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "vsyncThread stopped\n");
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "vsyncThread stopped");
 
     return 0;
 }

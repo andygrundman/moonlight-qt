@@ -163,14 +163,12 @@ void StreamingPreferences::reload()
                                                          static_cast<int>(CaptureSysKeysMode::CSK_OFF)).toInt());
     audioConfig = static_cast<AudioConfig>(settings.value(SER_AUDIOCFG,
                                                   static_cast<int>(AudioConfig::AC_STEREO)).toInt());
-    spatialAudioConfig = static_cast<SpatialAudioConfig>(settings.value(SER_SPATIALAUDIOCFG,
-                                                  static_cast<int>(SpatialAudioConfig::SAC_DISABLED)).toInt());
     videoCodecConfig = static_cast<VideoCodecConfig>(settings.value(SER_VIDEOCFG,
                                                   static_cast<int>(VideoCodecConfig::VCC_AUTO)).toInt());
     videoDecoderSelection = static_cast<VideoDecoderSelection>(settings.value(SER_VIDEODEC,
                                                   static_cast<int>(VideoDecoderSelection::VDS_AUTO)).toInt());
     rendererSelection = static_cast<RendererSelection>(settings.value(SER_RENDERER,
-                                                  static_cast<int>(RendererSelection::RS_METAL)).toInt());
+                                                  static_cast<int>(RendererSelection::RS_AUTO)).toInt());
     windowMode = static_cast<WindowMode>(settings.value(SER_WINDOWMODE,
                                                         // Try to load from the old preference value too
                                                         static_cast<int>(settings.value(SER_FULLSCREEN, true).toBool() ?
@@ -180,14 +178,24 @@ void StreamingPreferences::reload()
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
+#ifdef Q_OS_DARWIN
+    rendererSelection = static_cast<RendererSelection>(settings.value(SER_RENDERER,
+                                                  static_cast<int>(RendererSelection::RS_METAL)).toInt());
+    vtMetalFramesInFlight = settings.value(SER_VTMETALFRAMESINFLIGHT, 3).toInt();
     audioRenderer = static_cast<AudioRenderer>(settings.value(SER_AUDIO_RENDERER,
                                                     static_cast<int>(AudioRenderer::AUDIO_RENDERER_COREAUDIO)).toInt());
+    spatialAudioConfig = static_cast<SpatialAudioConfig>(settings.value(SER_SPATIALAUDIOCFG,
+                                                    static_cast<int>(SpatialAudioConfig::SAC_DISABLED)).toInt());
+#endif
+#ifdef Q_OS_WIN32
+    rendererSelection = static_cast<RendererSelection>(settings.value(SER_RENDERER,
+                                                    static_cast<int>(RendererSelection::RS_D3D11)).toInt());
+#endif
     framePacingMode = static_cast<FramePacingMode>(settings.value(SER_FRAMEPACINGMODE,
                                                    static_cast<int>(FramePacingMode::FRAME_PACING_IMMEDIATE)).toInt());
     presentMode = static_cast<PresentMode>(settings.value(SER_FRAMEPRESENTMODE,
                                                     static_cast<int>(PresentMode::PRESENT_AUTO)).toInt());
     showPerformanceGraphs = settings.value(SER_SHOWPERFORMANCEGRAPHS, false).toBool();
-    vtMetalFramesInFlight = settings.value(SER_VTMETALFRAMESINFLIGHT, 3).toInt();
 
     // old enableVsync is now based on presentMode
     if (presentMode == PresentMode::PRESENT_NO_VSYNC) {

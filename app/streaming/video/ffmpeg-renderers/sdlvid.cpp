@@ -6,6 +6,7 @@
 #include <Limelight.h>
 
 #include <SDL_syswm.h>
+#include <QtMath>
 
 extern "C" {
 #include <libavutil/pixdesc.h>
