@@ -31,7 +31,7 @@ typedef NTSTATUS(APIENTRY* PFND3DKMTWAITFORVERTICALBLANKEVENT)(D3DKMT_WAITFORVER
 class DxVsyncSource : public IVsyncSource
 {
 public:
-    DxVsyncSource(IFramePacer* pacer);
+    DxVsyncSource();
 
     virtual ~DxVsyncSource();
 
@@ -42,7 +42,6 @@ public:
     virtual void waitForVsync() override;
 
 private:
-    IFramePacer* m_Pacer;
     HMODULE m_Gdi32Handle;
     HWND m_Window;
     HMONITOR m_LastMonitor;

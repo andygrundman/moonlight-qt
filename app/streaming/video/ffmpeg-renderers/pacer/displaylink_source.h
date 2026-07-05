@@ -16,7 +16,6 @@ public:
     virtual bool initialize(SDL_Window* window, int displayFps) override;
     virtual void stop() override;
     virtual bool isAsync() override;
-    virtual double remainingMilliseconds() override;
 
     void displayLinkUpdate(double timestamp, double targetTimestamp);
 

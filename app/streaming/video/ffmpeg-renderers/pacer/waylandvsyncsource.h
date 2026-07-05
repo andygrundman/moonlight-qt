@@ -8,7 +8,7 @@
 class WaylandVsyncSource : public IVsyncSource
 {
 public:
-    WaylandVsyncSource(IFramePacer* pacer);
+    WaylandVsyncSource();
 
     virtual ~WaylandVsyncSource();
 
@@ -21,7 +21,6 @@ private:
 
     static const struct wl_callback_listener s_FrameListener;
 
-    IFramePacer* m_Pacer;
     wl_display* m_Display;
     wl_surface* m_Surface;
     wl_callback* m_Callback;

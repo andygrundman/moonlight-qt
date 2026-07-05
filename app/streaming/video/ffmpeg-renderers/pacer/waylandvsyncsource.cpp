@@ -10,9 +10,8 @@ const struct wl_callback_listener WaylandVsyncSource::s_FrameListener = {
     .done = WaylandVsyncSource::frameDone,
 };
 
-WaylandVsyncSource::WaylandVsyncSource(IFramePacer* pacer)
-    : m_Pacer(pacer),
-      m_Display(nullptr),
+WaylandVsyncSource::WaylandVsyncSource()
+    : m_Display(nullptr),
       m_Surface(nullptr),
       m_Callback(nullptr)
 {
@@ -60,7 +59,7 @@ bool WaylandVsyncSource::isAsync()
     return true;
 }
 
-void WaylandVsyncSource::frameDone(void* data, struct wl_callback* oldCb, uint32_t)
+void WaylandVsyncSource::frameDone(void* data, struct wl_callback* oldCb, uint32_t timestamp)
 {
     auto me = (WaylandVsyncSource*)data;
 
@@ -69,7 +68,7 @@ void WaylandVsyncSource::frameDone(void* data, struct wl_callback* oldCb, uint32
     wl_callback_destroy(oldCb);
 
     // Wake the Pacer Vsync thread
-    me->m_Pacer->signalVsync();
+    FramePacer::instance().signalVsyncTS(timestamp, -1.0);
 
     // Register for another callback
     me->m_Callback = wl_surface_frame(me->m_Surface);

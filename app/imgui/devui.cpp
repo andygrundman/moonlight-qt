@@ -145,6 +145,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
         Stats::instance().SetShowGraphs(config.showGraphs);
     }
 
+#ifdef __APPLE__
     if (old.showMetalHud != config.showMetalHud) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "DevUI: Pending change of showMetalHud from %d to %d",
@@ -211,6 +212,7 @@ void DevUISettings::ChangeAndApplyConfig(DevUIConfig& config)
              Session::get()->getAudioRenderer()->setHeadTracking(config.useHeadTracking);
         }
     }
+#endif
 
     std::lock_guard<std::mutex> lock(m_Mutex);
     m_Config = config;
@@ -520,6 +522,7 @@ void DevUISettings::Render()
 
                 ImGui::Text("Input stream: %s-channel Opus low-delay @ 48 kHz",
                     metrics.opusChannelCount == 6 ? "5.1" : metrics.opusChannelCount == 8 ? "7.1" : "2");
+            #ifdef __APPLE__
                 if (cfg.audioRenderer == StreamingPreferences::AUDIO_RENDERER_COREAUDIO) {
                     ImGui::Text("Output: CoreAudio: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
                     ImGui::Text("Audio buffer: %.2fms", metrics.audioInBufferMs);
@@ -554,8 +557,9 @@ void DevUISettings::Render()
                             "Head-tracking works best when Game Mode is active and Moonlight is running fullscreen. Game Mode reduces Bluetooth latency in AirPods from 160ms to about 80ms, although this number is not reflected in the hardware latency number.\n\n"
                             "Audio glitches are more common when head-tracking is enabled.");
                     }
-                }
-                else {
+                } else
+            #endif
+                {
                     ImGui::Text("Output: SDL: %s @ %.1f kHz, %u-channel", metrics.audioOutputDeviceName, metrics.audioSampleRate / 1000.0, metrics.audioChannels);
                     ImGui::Text("Audio buffer: %.2fms", metrics.audioInBufferMs);
                     ImGui::Text("Drop count: %d", metrics.audioDropCount);
