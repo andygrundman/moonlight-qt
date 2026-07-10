@@ -50,7 +50,7 @@ namespace {
 }  // namespace
 
 PyroWaveVideoDecoder::PyroWaveVideoDecoder(bool testOnly)
-    : m_TestOnly(testOnly), m_Width(0), m_Height(0), m_Window(nullptr),
+    : m_TestOnly(testOnly), m_Width(0), m_Height(0), m_YUV444(false), m_Window(nullptr),
       m_PyroDevice(nullptr), m_Decoder(nullptr), m_VkDev(VK_NULL_HANDLE), m_VkPhys(VK_NULL_HANDLE),
       m_VkQueue(VK_NULL_HANDLE), m_VkFamily(0), m_VkPool(VK_NULL_HANDLE), m_VkCmd(VK_NULL_HANDLE),
       m_GetMemoryFd(nullptr), m_GetImgMod(nullptr),
@@ -167,7 +167,9 @@ bool PyroWaveVideoDecoder::createPlanes() {
     if (mods.empty()) {
         return false;
     }
-    int dims[3][2] = {{m_Width, m_Height}, {m_Width / 2, m_Height / 2}, {m_Width / 2, m_Height / 2}};
+    int chromaW = m_YUV444 ? m_Width : m_Width / 2;
+    int chromaH = m_YUV444 ? m_Height : m_Height / 2;
+    int dims[3][2] = {{m_Width, m_Height}, {chromaW, chromaH}, {chromaW, chromaH}};
     for (int i = 0; i < 3; i++) {
         Plane& p = m_Planes[i];
         p.w = dims[i][0];
@@ -375,9 +377,10 @@ bool PyroWaveVideoDecoder::createSharedTimeline() {
 }
 
 bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
-    if (params->videoFormat != VIDEO_FORMAT_PYROWAVE) {
+    if (!(params->videoFormat & VIDEO_FORMAT_MASK_PYROWAVE)) {
         return false;
     }
+    m_YUV444 = !!(params->videoFormat & VIDEO_FORMAT_PYROWAVE_444);
     m_Width = params->width & ~1;
     m_Height = params->height & ~1;
     m_Window = params->window;
@@ -391,7 +394,7 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
     ci.device = m_PyroDevice;
     ci.width = m_Width;
     ci.height = m_Height;
-    ci.chroma = PYROWAVE_CHROMA_SUBSAMPLING_420;
+    ci.chroma = m_YUV444 ? PYROWAVE_CHROMA_SUBSAMPLING_444 : PYROWAVE_CHROMA_SUBSAMPLING_420;
     ci.fragment_path = pyrowave_decoder_device_prefers_fragment_path(m_PyroDevice);
     if (pyrowave_decoder_create(&ci, &m_Decoder) != PYROWAVE_SUCCESS) {
         return false;
@@ -411,7 +414,7 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
         Session::get()->getOverlayManager().setOverlayRenderer(this);
     }
 
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave GPU zero-copy decoder ready: %dx%d", m_Width, m_Height);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave GPU zero-copy decoder ready: %dx%d %s", m_Width, m_Height, m_YUV444 ? "4:4:4" : "4:2:0");
     return true;
 }
 
@@ -500,6 +503,7 @@ void PyroWaveVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst) {
     dst.renderedFrames += src.renderedFrames;
     dst.totalFrames += src.totalFrames;
     dst.networkDroppedFrames += src.networkDroppedFrames;
+    dst.totalReassemblyTimeUs += src.totalReassemblyTimeUs;
     dst.totalDecodeTimeUs += src.totalDecodeTimeUs;
     dst.totalRenderTimeUs += src.totalRenderTimeUs;
     if (dst.minHostProcessingLatency == 0) {
@@ -534,11 +538,14 @@ void PyroWaveVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output,
 
     if (stats.receivedFps > 0) {
         ret = snprintf(&output[offset], length - offset,
-                       "Video stream: %dx%d %.2f FPS (Codec: PyroWave)\n"
+                       "Video stream: %dx%d %.2f FPS (Codec: PyroWave %s)\n"
+                       "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
                        "Incoming frame rate from network: %.2f FPS\n"
                        "Decoding frame rate: %.2f FPS\n"
                        "Rendering frame rate: %.2f FPS\n",
-                       m_Width, m_Height, stats.totalFps, stats.receivedFps, stats.decodedFps, stats.renderedFps);
+                       m_Width, m_Height, stats.totalFps, m_YUV444 ? "4:4:4" : "4:2:0",
+                       m_BwTracker.GetAverageMbps(), m_BwTracker.GetWindowSeconds(), m_BwTracker.GetPeakMbps(),
+                       stats.receivedFps, stats.decodedFps, stats.renderedFps);
         if (ret < 0 || ret >= length - offset) return;
         offset += ret;
     }
@@ -561,10 +568,11 @@ void PyroWaveVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output,
         ret = snprintf(&output[offset], length - offset,
                        "Frames dropped by your network connection: %.2f%%\n"
                        "Average network latency: %s\n"
-                       "Average decoding time: %.2f ms\n"
+                       "Average reassembly/decoding time: %.2f/%.2f ms\n"
                        "Average rendering time (including monitor V-sync latency): %.2f ms\n",
                        stats.totalFrames ? (float) stats.networkDroppedFrames / stats.totalFrames * 100 : 0.0f,
                        rttString,
+                       stats.decodedFrames ? (double) (stats.totalReassemblyTimeUs / 1000.0) / stats.decodedFrames : 0.0,
                        stats.decodedFrames ? (double) (stats.totalDecodeTimeUs / 1000.0) / stats.decodedFrames : 0.0,
                        stats.renderedFrames ? (double) (stats.totalRenderTimeUs / 1000.0) / stats.renderedFrames : 0.0);
         if (ret < 0 || ret >= length - offset) return;
@@ -615,6 +623,10 @@ int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
     m_ActiveWndVideoStats.totalHostProcessingLatency += du->frameHostProcessingLatency;
     m_ActiveWndVideoStats.receivedFrames++;
     m_ActiveWndVideoStats.totalFrames++;
+
+    m_BwTracker.AddBytes(du->fullLength);
+    // Reassembly (receive-to-enqueue) happens on the receive thread and is otherwise invisible here.
+    m_ActiveWndVideoStats.totalReassemblyTimeUs += (du->enqueueTimeUs - du->receiveTimeUs);
 
     uint64_t decodeStartUs = LiGetMicroseconds();
 

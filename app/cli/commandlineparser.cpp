@@ -310,6 +310,9 @@ StreamCommandLineParser::StreamCommandLineParser()
         {"H.264", StreamingPreferences::VCC_FORCE_H264},
         {"HEVC",  StreamingPreferences::VCC_FORCE_HEVC},
         {"AV1", StreamingPreferences::VCC_FORCE_AV1},
+#ifdef HAVE_PYROWAVE
+        {"PyroWave", StreamingPreferences::VCC_FORCE_PYROWAVE},
+#endif
     };
     m_VideoDecoderMap = {
         {"auto",     StreamingPreferences::VDS_AUTO},

@@ -305,7 +305,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 enableVsync ? "enabled" : "disabled");
 
 #ifdef HAVE_PYROWAVE
-    if (videoFormat == VIDEO_FORMAT_PYROWAVE) {
+    if (videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) {
         chosenDecoder = new PyroWaveVideoDecoder(testOnly);
         if (chosenDecoder->initialize(&params)) {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -737,6 +737,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
     // Start with all codecs and profiles in priority order
 #ifdef HAVE_PYROWAVE
     // PyroWave (intra-only, low latency) is preferred when both ends support it.
+    m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE_444);
     m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE);
 #endif
     m_SupportedVideoFormats.append(VIDEO_FORMAT_AV1_HIGH10_444);

@@ -14,6 +14,7 @@
 
   #include "decoder.h"
   #include "overlaymanager.h"
+  #include "../bandwidth.h"
 
   #include <SDL.h>
   #include <SDL_vulkan.h>
@@ -77,6 +78,7 @@ private:
     bool m_TestOnly;
     int m_Width;
     int m_Height;
+    bool m_YUV444;
     SDL_Window* m_Window;
 
     // PyroWave decode side (its own headless device).
@@ -119,6 +121,7 @@ private:
     // atomics folded in at each 1-second window flip.
     VIDEO_STATS m_ActiveWndVideoStats = {};
     VIDEO_STATS m_LastWndVideoStats = {};
+    BandwidthTracker m_BwTracker;
     uint32_t m_LastFrameNumber;
     std::atomic<uint32_t> m_RenderedFrames;
     std::atomic<uint64_t> m_TotalRenderTimeUs;
