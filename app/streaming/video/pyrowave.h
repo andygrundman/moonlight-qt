@@ -79,6 +79,9 @@ private:
     int m_Width;
     int m_Height;
     bool m_YUV444;
+    bool m_TenBit;
+    std::atomic<bool> m_HdrEnabled;      // host HDR state (control stream); read on render thread
+    pl_color_space m_LastColorspace;     // render thread only; drives swapchain colorspace hints
     SDL_Window* m_Window;
 
     // PyroWave decode side (its own headless device).

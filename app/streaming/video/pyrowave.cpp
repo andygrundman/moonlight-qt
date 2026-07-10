@@ -30,14 +30,14 @@ namespace {
     return UINT32_MAX;
   }
 
-  std::vector<uint64_t> storageModifiers(VkPhysicalDevice pd) {
+  std::vector<uint64_t> storageModifiers(VkPhysicalDevice pd, VkFormat format) {
     VkDrmFormatModifierPropertiesListEXT list{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
     VkFormatProperties2 fp{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
     fp.pNext = &list;
-    vkGetPhysicalDeviceFormatProperties2(pd, VK_FORMAT_R8_UNORM, &fp);
+    vkGetPhysicalDeviceFormatProperties2(pd, format, &fp);
     std::vector<VkDrmFormatModifierPropertiesEXT> props(list.drmFormatModifierCount);
     list.pDrmFormatModifierProperties = props.data();
-    vkGetPhysicalDeviceFormatProperties2(pd, VK_FORMAT_R8_UNORM, &fp);
+    vkGetPhysicalDeviceFormatProperties2(pd, format, &fp);
     std::vector<uint64_t> out;
     for (auto& m : props) {
       if ((m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
@@ -50,7 +50,8 @@ namespace {
 }  // namespace
 
 PyroWaveVideoDecoder::PyroWaveVideoDecoder(bool testOnly)
-    : m_TestOnly(testOnly), m_Width(0), m_Height(0), m_YUV444(false), m_Window(nullptr),
+    : m_TestOnly(testOnly), m_Width(0), m_Height(0), m_YUV444(false), m_TenBit(false),
+      m_HdrEnabled(false), m_LastColorspace{}, m_Window(nullptr),
       m_PyroDevice(nullptr), m_Decoder(nullptr), m_VkDev(VK_NULL_HANDLE), m_VkPhys(VK_NULL_HANDLE),
       m_VkQueue(VK_NULL_HANDLE), m_VkFamily(0), m_VkPool(VK_NULL_HANDLE), m_VkCmd(VK_NULL_HANDLE),
       m_GetMemoryFd(nullptr), m_GetImgMod(nullptr),
@@ -163,7 +164,8 @@ bool PyroWaveVideoDecoder::createPyroDevice() {
 }
 
 bool PyroWaveVideoDecoder::createPlanes() {
-    auto mods = storageModifiers(m_VkPhys);
+    VkFormat planeFmt = m_TenBit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
+    auto mods = storageModifiers(m_VkPhys, planeFmt);
     if (mods.empty()) {
         return false;
     }
@@ -184,7 +186,7 @@ bool PyroWaveVideoDecoder::createPlanes() {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.pNext = &ml;
         ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R8_UNORM;
+        ci.format = planeFmt;
         ci.extent = {(uint32_t) p.w, (uint32_t) p.h, 1};
         ci.mipLevels = 1;
         ci.arrayLayers = 1;
@@ -214,7 +216,7 @@ bool PyroWaveVideoDecoder::createPlanes() {
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vi.image = p.image;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R8_UNORM;
+        vi.format = planeFmt;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView(m_VkDev, &vi, nullptr, &p.view) != VK_SUCCESS) {
             return false;
@@ -313,15 +315,16 @@ bool PyroWaveVideoDecoder::createLibplacebo(PDECODER_PARAMETERS params) {
 }
 
 bool PyroWaveVideoDecoder::importPlanes() {
-    pl_fmt r8 = pl_find_fmt(m_Vulkan->gpu, PL_FMT_UNORM, 1, 8, 8, PL_FMT_CAP_SAMPLEABLE);
-    if (!r8) {
+    int depth = m_TenBit ? 16 : 8;
+    pl_fmt fmt = pl_find_fmt(m_Vulkan->gpu, PL_FMT_UNORM, 1, depth, depth, PL_FMT_CAP_SAMPLEABLE);
+    if (!fmt) {
         return false;
     }
     for (auto& p : m_Planes) {
         pl_tex_params tp = {};
         tp.w = p.w;
         tp.h = p.h;
-        tp.format = r8;
+        tp.format = fmt;
         tp.sampleable = true;
         tp.import_handle = PL_HANDLE_DMA_BUF;
         tp.shared_mem.handle.fd = p.fd;  // libplacebo takes ownership of the fd
@@ -380,7 +383,8 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
     if (!(params->videoFormat & VIDEO_FORMAT_MASK_PYROWAVE)) {
         return false;
     }
-    m_YUV444 = !!(params->videoFormat & VIDEO_FORMAT_PYROWAVE_444);
+    m_YUV444 = !!(params->videoFormat & (VIDEO_FORMAT_PYROWAVE_444 | VIDEO_FORMAT_PYROWAVE10_444));
+    m_TenBit = !!(params->videoFormat & VIDEO_FORMAT_MASK_10BIT);
     m_Width = params->width & ~1;
     m_Height = params->height & ~1;
     m_Window = params->window;
@@ -414,7 +418,7 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
         Session::get()->getOverlayManager().setOverlayRenderer(this);
     }
 
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave GPU zero-copy decoder ready: %dx%d %s", m_Width, m_Height, m_YUV444 ? "4:4:4" : "4:2:0");
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave GPU zero-copy decoder ready: %dx%d %s %s", m_Width, m_Height, m_YUV444 ? "4:4:4" : "4:2:0", m_TenBit ? "10-bit" : "8-bit");
     return true;
 }
 
@@ -489,12 +493,16 @@ void PyroWaveVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type) {
 
 bool PyroWaveVideoDecoder::isHardwareAccelerated() { return true; }
 bool PyroWaveVideoDecoder::isAlwaysFullScreen() { return false; }
-bool PyroWaveVideoDecoder::isHdrSupported() { return false; }
+bool PyroWaveVideoDecoder::isHdrSupported() { return true; }
 int PyroWaveVideoDecoder::getDecoderCapabilities() { return 0; }
 int PyroWaveVideoDecoder::getDecoderColorspace() { return COLORSPACE_REC_601; }
 int PyroWaveVideoDecoder::getDecoderColorRange() { return COLOR_RANGE_LIMITED; }
 QSize PyroWaveVideoDecoder::getDecoderMaxResolution() { return QSize(0, 0); }
-void PyroWaveVideoDecoder::setHdrMode(bool) {}
+void PyroWaveVideoDecoder::setHdrMode(bool enabled) {
+    // Consumed on the render thread: switches the pl_frame colorspace + swapchain hint.
+    m_HdrEnabled.store(enabled);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: HDR mode %s", enabled ? "enabled" : "disabled");
+}
 bool PyroWaveVideoDecoder::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO) { return false; }
 
 void PyroWaveVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst) {
@@ -538,12 +546,13 @@ void PyroWaveVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output,
 
     if (stats.receivedFps > 0) {
         ret = snprintf(&output[offset], length - offset,
-                       "Video stream: %dx%d %.2f FPS (Codec: PyroWave %s)\n"
+                       "Video stream: %dx%d %.2f FPS (Codec: PyroWave %s%s)\n"
                        "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
                        "Incoming frame rate from network: %.2f FPS\n"
                        "Decoding frame rate: %.2f FPS\n"
                        "Rendering frame rate: %.2f FPS\n",
                        m_Width, m_Height, stats.totalFps, m_YUV444 ? "4:4:4" : "4:2:0",
+                       m_TenBit ? (m_HdrEnabled.load() ? " 10-bit HDR" : " 10-bit") : "",
                        m_BwTracker.GetAverageMbps(), m_BwTracker.GetWindowSeconds(), m_BwTracker.GetPeakMbps(),
                        stats.receivedFps, stats.decodedFps, stats.renderedFps);
         if (ret < 0 || ret >= length - offset) return;
@@ -656,13 +665,14 @@ int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
         return DR_OK;
     }
 
+    VkFormat planeFmt = m_TenBit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
     auto view = [&](Plane& p) {
         pyrowave_image_view v{};
         v.image = p.image;
         v.width = (uint32_t) p.w;
         v.height = (uint32_t) p.h;
-        v.image_format = VK_FORMAT_R8_UNORM;
-        v.view_format = VK_FORMAT_R8_UNORM;
+        v.image_format = planeFmt;
+        v.view_format = planeFmt;
         v.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         v.swizzle = VK_COMPONENT_SWIZZLE_IDENTITY;
         v.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -724,6 +734,44 @@ void PyroWaveVideoDecoder::renderFrameOnMainThread() {
         pl_vulkan_release_ex(m_Vulkan->gpu, &rp);
     }
 
+    // Source colorspace + representation follow the host's HDR state (control-stream driven, can
+    // change mid-stream). Must match the encoder's shader convention:
+    //   SDR: BT.601 limited on sRGB R'G'B'.  HDR: BT.2020 NCL FULL range on PQ R'G'B'.
+    bool hdr = m_HdrEnabled.load();
+    struct pl_color_space csp = {};
+    struct pl_color_repr repr = {};
+    if (hdr) {
+        csp.primaries = PL_COLOR_PRIM_BT_2020;
+        csp.transfer = PL_COLOR_TRC_PQ;
+        SS_HDR_METADATA md;
+        if (LiGetHdrMetadata(&md)) {
+            csp.hdr.prim.red = {md.displayPrimaries[0].x / 50000.0f, md.displayPrimaries[0].y / 50000.0f};
+            csp.hdr.prim.green = {md.displayPrimaries[1].x / 50000.0f, md.displayPrimaries[1].y / 50000.0f};
+            csp.hdr.prim.blue = {md.displayPrimaries[2].x / 50000.0f, md.displayPrimaries[2].y / 50000.0f};
+            csp.hdr.prim.white = {md.whitePoint.x / 50000.0f, md.whitePoint.y / 50000.0f};
+            csp.hdr.max_luma = md.maxDisplayLuminance;
+            // Sub-nit precision; PL_COLOR_HDR_BLACK (infinite contrast) when unset, like plvk.
+            csp.hdr.min_luma = md.minDisplayLuminance ? md.minDisplayLuminance / 10000.0f : PL_COLOR_HDR_BLACK;
+            csp.hdr.max_cll = md.maxContentLightLevel;
+            csp.hdr.max_fall = md.maxFrameAverageLightLevel;
+        }
+        repr.sys = PL_COLOR_SYSTEM_BT_2020_NC;
+        repr.levels = PL_COLOR_LEVELS_FULL;
+    } else {
+        // YUV matrix must match the encoder (BT.601 limited). Primaries/transfer describe the
+        // RGB volume, which is the captured desktop = sRGB.
+        csp.primaries = PL_COLOR_PRIM_BT_709;
+        csp.transfer = PL_COLOR_TRC_SRGB;
+        repr.sys = PL_COLOR_SYSTEM_BT_601;
+        repr.levels = PL_COLOR_LEVELS_LIMITED;
+    }
+    if (!pl_color_space_equal(&csp, &m_LastColorspace)) {
+        m_LastColorspace = csp;
+        // libplacebo picks the closest supported swapchain colorspace (HDR10 when available) and
+        // tonemaps otherwise, so an SDR-only display still presents HDR streams correctly.
+        pl_swapchain_colorspace_hint(m_Swapchain, &csp);
+    }
+
     int dw = 0, dh = 0;
     SDL_Vulkan_GetDrawableSize(m_Window, &dw, &dh);
     if (pl_swapchain_resize(m_Swapchain, &dw, &dh)) {
@@ -777,14 +825,8 @@ void PyroWaveVideoDecoder::renderFrameOnMainThread() {
                 src.planes[i].components = 1;
                 src.planes[i].component_mapping[0] = i;  // 0=Y, 1=Cb, 2=Cr
             }
-            // YUV matrix must match the encoder (BT.601 limited). Primaries/transfer describe the
-            // RGB volume, which is the captured desktop = sRGB (BT.709 primaries + sRGB transfer);
-            // declaring that lets libplacebo map to the display near-identity instead of applying a
-            // spurious BT.601->display gamut/tone conversion.
-            src.repr.sys = PL_COLOR_SYSTEM_BT_601;
-            src.repr.levels = PL_COLOR_LEVELS_LIMITED;
-            src.color.primaries = PL_COLOR_PRIM_BT_709;
-            src.color.transfer = PL_COLOR_TRC_SRGB;
+            src.repr = repr;
+            src.color = csp;
             src.crop.x0 = 0;
             src.crop.y0 = 0;
             src.crop.x1 = m_Width;

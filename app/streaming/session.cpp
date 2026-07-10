@@ -737,6 +737,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
     // Start with all codecs and profiles in priority order
 #ifdef HAVE_PYROWAVE
     // PyroWave (intra-only, low latency) is preferred when both ends support it.
+    // Profile order mirrors AV1: 10-bit 4:4:4, 10-bit, 8-bit 4:4:4, 8-bit.
+    m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE10_444);
+    m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE10_420);
     m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE_444);
     m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE);
 #endif
