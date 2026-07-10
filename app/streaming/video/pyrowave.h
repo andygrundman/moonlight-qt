@@ -25,7 +25,6 @@
 
   #include <atomic>
   #include <mutex>
-  #include <vector>
 
 struct pyrowave_device_opaque;
 struct pyrowave_decoder_opaque;
@@ -126,7 +125,6 @@ private:
     VIDEO_STATS m_ActiveWndVideoStats = {};
     VIDEO_STATS m_LastWndVideoStats = {};
     BandwidthTracker m_BwTracker;
-    std::vector<uint8_t> m_PacketScratch;  // for packets straddling buffer-chain entries
     uint32_t m_LastFrameNumber;
     std::atomic<uint32_t> m_RenderedFrames;
     std::atomic<uint64_t> m_TotalRenderTimeUs;
