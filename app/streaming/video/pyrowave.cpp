@@ -519,7 +519,12 @@ void PyroWaveVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type) {
 bool PyroWaveVideoDecoder::isHardwareAccelerated() { return true; }
 bool PyroWaveVideoDecoder::isAlwaysFullScreen() { return false; }
 bool PyroWaveVideoDecoder::isHdrSupported() { return true; }
-int PyroWaveVideoDecoder::getDecoderCapabilities() { return 0; }
+int PyroWaveVideoDecoder::getDecoderCapabilities() {
+    // Decode directly on the receive thread: submitDecodeUnit only pushes packets and submits
+    // GPU work (cross-device sync is via timeline semaphores, no CPU waits), so skipping the
+    // decode-unit queue removes a thread hop + wakeup jitter from the latency path.
+    return CAPABILITY_DIRECT_SUBMIT;
+}
 int PyroWaveVideoDecoder::getDecoderColorspace() { return COLORSPACE_REC_601; }
 int PyroWaveVideoDecoder::getDecoderColorRange() { return COLOR_RANGE_LIMITED; }
 QSize PyroWaveVideoDecoder::getDecoderMaxResolution() { return QSize(0, 0); }
@@ -664,27 +669,65 @@ int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
 
     uint64_t decodeStartUs = LiGetMicroseconds();
 
-    // Host frames the PyroWave packets as [u32 count]{[u32 size][bytes]}*; reassemble + re-push.
-    std::vector<uint8_t> frame;
-    frame.reserve((size_t) du->fullLength);
-    for (PLENTRY e = du->bufferList; e; e = e->next) {
-        const uint8_t* d = reinterpret_cast<const uint8_t*>(e->data);
-        frame.insert(frame.end(), d, d + e->length);
-    }
-    size_t pos = 0;
+    // Host frames the PyroWave packets as [u32 count]{[u32 size][bytes]}*. Parse the buffer
+    // chain in place instead of flattening it: only packets straddling an entry boundary are
+    // copied, into a persistent scratch (packets are ~1 KB by host packetization, so the copy
+    // is small and the scratch stops growing after the first frames).
+    PLENTRY entry = du->bufferList;
+    size_t entryOff = 0;
+    size_t remaining = (size_t) du->fullLength;
+
+    // Returns n contiguous bytes and advances the cursor: in place from the current chain
+    // entry when possible, else gathered into dst.
+    auto readBytes = [&](uint8_t* dst, size_t n) -> const uint8_t* {
+        if (n > remaining) {
+            return nullptr;
+        }
+        remaining -= n;
+        if (entry && entryOff + n <= (size_t) entry->length) {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(entry->data) + entryOff;
+            entryOff += n;
+            if (entryOff == (size_t) entry->length) {
+                entry = entry->next;
+                entryOff = 0;
+            }
+            return p;
+        }
+        for (size_t got = 0; got < n; ) {
+            if (!entry) {
+                return nullptr;
+            }
+            size_t take = qMin((size_t) entry->length - entryOff, n - got);
+            SDL_memcpy(dst + got, reinterpret_cast<const uint8_t*>(entry->data) + entryOff, take);
+            got += take;
+            entryOff += take;
+            if (entryOff == (size_t) entry->length) {
+                entry = entry->next;
+                entryOff = 0;
+            }
+        }
+        return dst;
+    };
     auto u32 = [&](uint32_t& v) -> bool {
-        if (pos + 4 > frame.size()) return false;
-        v = (uint32_t) frame[pos] | ((uint32_t) frame[pos+1] << 8) | ((uint32_t) frame[pos+2] << 16) | ((uint32_t) frame[pos+3] << 24);
-        pos += 4;
+        uint8_t tmp[4];
+        const uint8_t* p = readBytes(tmp, 4);
+        if (!p) {
+            return false;
+        }
+        v = (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
         return true;
     };
     uint32_t count = 0;
     if (!u32(count)) return DR_OK;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t sz = 0;
-        if (!u32(sz) || pos + sz > frame.size()) break;
-        pyrowave_decoder_push_packet(m_Decoder, frame.data() + pos, sz);
-        pos += sz;
+        if (!u32(sz) || sz > remaining) break;
+        if (sz > m_PacketScratch.size()) {
+            m_PacketScratch.resize(sz);
+        }
+        const uint8_t* pkt = readBytes(m_PacketScratch.data(), sz);
+        if (!pkt) break;
+        pyrowave_decoder_push_packet(m_Decoder, pkt, sz);
     }
     if (!pyrowave_decoder_decode_is_ready(m_Decoder, true)) {
         return DR_OK;
