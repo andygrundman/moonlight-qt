@@ -278,6 +278,10 @@ pyrowave {
     SOURCES += streaming/video/pyrowave.cpp
     HEADERS += streaming/video/pyrowave.h
 
+    # drm_fourcc.h for the dmabuf plane-export constants (header-only use; independent of the
+    # drm renderer, which the AppImage build disables via CONFIG+=disable-libdrm).
+    PKGCONFIG += libdrm
+
     # Link the PyroWave C API shared library (built via CMake into pyrowave/build) + Vulkan loader.
     LIBS += -L$$PWD/../pyrowave/build -lpyrowave-shared -lvulkan
     # Bake the shared-lib location into the runtime search path.
