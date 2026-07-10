@@ -166,9 +166,31 @@ bool PyroWaveVideoDecoder::createPyroDevice() {
 bool PyroWaveVideoDecoder::createPlanes() {
     VkFormat planeFmt = m_TenBit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
     auto mods = storageModifiers(m_VkPhys, planeFmt);
-    if (mods.empty()) {
+
+    // Restrict to modifiers libplacebo can import for this format, or the pl_tex_create import
+    // in importPlanes() will reject whatever the driver picked (seen on Van Gogh/RDNA2).
+    int depth = m_TenBit ? 16 : 8;
+    pl_fmt plFmt = pl_find_fmt(m_Vulkan->gpu, PL_FMT_UNORM, 1, depth, depth, PL_FMT_CAP_SAMPLEABLE);
+    if (!plFmt) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: no sampleable %d-bit plane format in libplacebo", depth);
         return false;
     }
+    std::vector<uint64_t> importable;
+    for (uint64_t m : mods) {
+        for (int i = 0; i < plFmt->num_modifiers; i++) {
+            if (plFmt->modifiers[i] == m) {
+                importable.push_back(m);
+                break;
+            }
+        }
+    }
+    if (importable.empty()) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "PyroWave: no DRM modifier is both storage-capable and libplacebo-importable "
+                     "(%zu storage, %d importable)", mods.size(), plFmt->num_modifiers);
+        return false;
+    }
+    mods = std::move(importable);
     int chromaW = m_YUV444 ? m_Width : m_Width / 2;
     int chromaH = m_YUV444 ? m_Height : m_Height / 2;
     int dims[3][2] = {{m_Width, m_Height}, {chromaW, chromaH}, {chromaW, chromaH}};
@@ -408,7 +430,10 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
         return true;
     }
 
-    if (!createPlanes() || !createLibplacebo(params) || !importPlanes() || !createSharedTimeline()) {
+    // libplacebo first: plane images must be created with a DRM modifier libplacebo can import
+    // (createPlanes intersects the storage-capable modifiers with pl_fmt's import list — on some
+    // GPUs, e.g. Steam Deck's Van Gogh, radv otherwise picks a storage modifier pl can't sample).
+    if (!createLibplacebo(params) || !createPlanes() || !importPlanes() || !createSharedTimeline()) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: GPU present pipeline init failed");
         return false;
     }
