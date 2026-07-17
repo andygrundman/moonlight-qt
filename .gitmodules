@@ -13,4 +13,4 @@
 	url = https://github.com/aizvorski/h264bitstream.git
 [submodule "pyrowave"]
 	path = pyrowave
-	url = https://github.com/Themaister/PyroWave
+	url = https://github.com/andygrundman/pyrowave.git
