@@ -2,9 +2,13 @@
  * @file app/streaming/video/pyrowave.h
  * @brief PyroWave (Vulkan wavelet, intra-only) client decoder for Moonlight.
  *
- * Stage B4 (GPU zero-copy present): PyroWave decodes on its own (headless) Vulkan device into
- * exportable dmabuf plane images; those planes are imported into a libplacebo Vulkan device which
- * does YUV->RGB + swapchain present. No CPU readback.
+ * Stage B4 (GPU zero-copy present), two per-platform wirings:
+ *  - Linux: PyroWave decodes on its own (headless) Vulkan device into exportable dmabuf plane
+ *    images; those planes are imported into a libplacebo Vulkan device which does YUV->RGB +
+ *    swapchain present. No CPU readback.
+ *  - macOS (MoltenVK): no dmabuf/external-fd interop exists, so PyroWave and libplacebo share a
+ *    single VkDevice created by us. Plane images are ordinary libplacebo textures whose VkImage
+ *    is handed to PyroWave's compute decode; sync uses one timeline semaphore on both sides.
  *
  * Compiled only when HAVE_PYROWAVE is defined.
  */
@@ -16,6 +20,14 @@
   #include "overlaymanager.h"
   #include "../bandwidth.h"
 
+  #ifdef __APPLE__
+    // Shared-device mode makes every Vulkan call through runtime-resolved entry points
+    // (MoltenVK via SDL); forbid direct prototypes so a stray call fails at compile time.
+    #define VK_NO_PROTOTYPES
+    // For VkPhysicalDevicePortabilitySubsetFeaturesKHR (still a beta extension header-side).
+    #define VK_ENABLE_BETA_EXTENSIONS
+  #endif
+
   #include <SDL.h>
   #include <SDL_vulkan.h>
   #include <vulkan/vulkan.h>
@@ -25,6 +37,13 @@
 
   #include <atomic>
   #include <mutex>
+  #include <vector>
+
+  #ifdef __APPLE__
+    // Full PyroWave C API: the shared-device members below store pyrowave create-info structs by
+    // value. Resolves to the pyrowave submodule header (angle brackets), not this file.
+    #include <pyrowave.h>
+  #endif
 
 struct pyrowave_device_opaque;
 struct pyrowave_decoder_opaque;
@@ -73,7 +92,10 @@ private:
     bool createPlanes();
     bool createLibplacebo(PDECODER_PARAMETERS params);
     bool importPlanes();
-    bool createSharedTimeline();  // libplacebo-created timeline sem, imported into PyroWave
+    bool createSharedTimeline();  // libplacebo-created timeline sem, shared with PyroWave
+  #ifdef __APPLE__
+    bool createSharedDevice();    // one VkDevice wrapped by both PyroWave and libplacebo
+  #endif
 
     bool m_TestOnly;
     int m_Width;
@@ -96,6 +118,27 @@ private:
     Plane m_Planes[3];
     PFN_vkGetMemoryFdKHR m_GetMemoryFd;
     PFN_vkGetImageDrmFormatModifierPropertiesEXT m_GetImgMod;
+
+  #ifdef __APPLE__
+    // Shared-device mode state. The create-info structs are handed to pyrowave_create_device(),
+    // which keeps pointers into them for the pyrowave_device's whole lifetime — they must live
+    // here, not on the stack.
+    std::mutex m_QueueMutex;   // serializes the single shared VkQueue (PyroWave vs libplacebo)
+    PFN_vkDestroyDevice m_DestroyDevice = nullptr;
+    PFN_vkDeviceWaitIdle m_DeviceWaitIdle = nullptr;
+    VkApplicationInfo m_AppInfo = {};
+    VkInstanceCreateInfo m_InstCreateInfo = {};
+    std::vector<const char*> m_DevExtNames;
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR m_FeatPortability = {};
+    VkPhysicalDeviceVulkan13Features m_Feat13 = {};
+    VkPhysicalDeviceVulkan12Features m_Feat12 = {};
+    VkPhysicalDeviceVulkan11Features m_Feat11 = {};
+    VkPhysicalDeviceFeatures2 m_Feat2 = {};
+    float m_QueuePriority = 1.0f;
+    VkDeviceQueueCreateInfo m_QueueCreateInfo = {};
+    VkDeviceCreateInfo m_DevCreateInfo = {};
+    pyrowave_device_create_queue_info m_QueueInfoDesc = {};
+  #endif
 
     // libplacebo present side (its own device + swapchain on the window surface).
     pl_log m_Log;

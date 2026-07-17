@@ -278,12 +278,19 @@ pyrowave {
     SOURCES += streaming/video/pyrowave.cpp
     HEADERS += streaming/video/pyrowave.h
 
-    # drm_fourcc.h for the dmabuf plane-export constants (header-only use; independent of the
-    # drm renderer, which the AppImage build disables via CONFIG+=disable-libdrm).
-    PKGCONFIG += libdrm
+    macx {
+        # macOS uses the shared-VkDevice path (MoltenVK has no dmabuf/external-fd interop):
+        # no libdrm, and no Vulkan loader link — all Vulkan entry points are resolved at
+        # runtime through SDL's vkGetInstanceProcAddr (which loads the bundled MoltenVK).
+        LIBS += -L$$PWD/../pyrowave/build -lpyrowave-shared
+    } else {
+        # drm_fourcc.h for the dmabuf plane-export constants (header-only use; independent of the
+        # drm renderer, which the AppImage build disables via CONFIG+=disable-libdrm).
+        PKGCONFIG += libdrm
 
-    # Link the PyroWave C API shared library (built via CMake into pyrowave/build) + Vulkan loader.
-    LIBS += -L$$PWD/../pyrowave/build -lpyrowave-shared -lvulkan
+        # Link the PyroWave C API shared library (built via CMake into pyrowave/build) + Vulkan loader.
+        LIBS += -L$$PWD/../pyrowave/build -lpyrowave-shared -lvulkan
+    }
     # Bake the shared-lib location into the runtime search path.
     QMAKE_RPATHDIR += $$PWD/../pyrowave/build
 }
@@ -594,6 +601,9 @@ macx {
 
     !disable-prebuilts {
         APP_BUNDLE_FRAMEWORKS.files = $$files(../libs/mac/Frameworks/*.framework, true) $$files(../libs/mac/lib/*.dylib, true)
+        # Ship the PyroWave decoder library in the bundle so @rpath resolves it without the
+        # build-tree rpath (also needed by its internal loader for the headless probe device).
+        pyrowave: APP_BUNDLE_FRAMEWORKS.files += $$files(../pyrowave/build/libpyrowave-shared*.dylib)
         APP_BUNDLE_FRAMEWORKS.path = Contents/Frameworks
 
         QMAKE_BUNDLE_DATA += APP_BUNDLE_FRAMEWORKS
