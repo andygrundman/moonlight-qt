@@ -6,6 +6,7 @@
 #endif
 
 #include "renderers/sdl.h"
+#include "../../settings/streamingpreferences.h"
 
 #include <Limelight.h>
 
@@ -19,10 +20,14 @@
 
 IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATION opusConfig)
 {
+    int jitterBufferMs = StreamingPreferences::get()->audioJitterBufferMs;
+
     // Handle explicit ML_AUDIO setting and fail if the requested backend fails
     QString mlAudio = qgetenv("ML_AUDIO").toLower();
     if (mlAudio == "sdl") {
-        TRY_INIT_RENDERER(SdlAudioRenderer, opusConfig)
+        SdlAudioRenderer* __r = new SdlAudioRenderer(jitterBufferMs);
+        if (__r->prepareForPlayback(opusConfig)) return __r;
+        delete __r;
         return nullptr;
     }
 #if defined(HAVE_SLAUDIO)
@@ -46,7 +51,11 @@ IAudioRenderer* Session::createAudioRenderer(const POPUS_MULTISTREAM_CONFIGURATI
 #endif
 
     // Default to SDL
-    TRY_INIT_RENDERER(SdlAudioRenderer, opusConfig)
+    {
+        SdlAudioRenderer* __r = new SdlAudioRenderer(jitterBufferMs);
+        if (__r->prepareForPlayback(opusConfig)) return __r;
+        delete __r;
+    }
 
     return nullptr;
 }

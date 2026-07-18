@@ -3,10 +3,12 @@
 #include "renderer.h"
 #include "SDL_compat.h"
 
+#include <atomic>
+
 class SdlAudioRenderer : public IAudioRenderer
 {
 public:
-    SdlAudioRenderer();
+    SdlAudioRenderer(int jitterBufferMs = 30);
 
     virtual ~SdlAudioRenderer();
 
@@ -18,9 +20,14 @@ public:
 
     virtual AudioFormat getAudioBufferFormat();
 
+    static uint32_t getQueueOverflowCount() { return s_QueueOverflowCount.load(std::memory_order_relaxed); }
+
 private:
     SDL_AudioDeviceID m_AudioDevice;
     void* m_AudioBuffer;
     Uint32 m_FrameSize;
     Uint32 m_FrameDurationMs;
+    int m_JitterBufferMs;
+
+    static std::atomic<uint32_t> s_QueueOverflowCount;
 };
