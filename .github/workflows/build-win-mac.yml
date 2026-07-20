@@ -86,7 +86,7 @@ jobs:
         working-directory: pyrowave
         run: |
           ./checkout_granite.sh
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build -j$(nproc)
 
       - name: Build Package
