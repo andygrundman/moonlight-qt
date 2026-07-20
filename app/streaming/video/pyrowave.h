@@ -19,6 +19,7 @@
   #include "decoder.h"
   #include "overlaymanager.h"
   #include "../bandwidth.h"
+  #include "imgui/imgui_backend.h"
 
   #ifdef __APPLE__
     // Shared-device mode makes every Vulkan call through runtime-resolved entry points
@@ -49,7 +50,7 @@ struct pyrowave_device_opaque;
 struct pyrowave_decoder_opaque;
 struct pyrowave_sync_object_opaque;
 
-class PyroWaveVideoDecoder : public IVideoDecoder, public Overlay::IOverlayRenderer {
+class PyroWaveVideoDecoder : public IVideoDecoder, public Overlay::IOverlayRenderer, public IImGuiBackend {
 public:
     PyroWaveVideoDecoder(bool testOnly);
     virtual ~PyroWaveVideoDecoder() override;
@@ -69,6 +70,13 @@ public:
 
     // Overlay::IOverlayRenderer
     virtual void notifyOverlayUpdated(Overlay::OverlayType type) override;
+
+  #ifndef IMGUI_DISABLE
+    // IImGuiBackend: imgui_impl_vulkan on the libplacebo device, rendering into an offscreen
+    // pl_tex that renderFrameOnMainThread composites as an extra pl_overlay.
+    virtual void ImGui_initBackend() override;
+    virtual void ImGui_deinitBackend() override;
+  #endif
 
 private:
     bool createOverlay(pl_overlay* overlay, SDL_Surface* surface);
@@ -161,16 +169,7 @@ private:
 
     std::mutex m_FrameLock;
     bool m_FrameReady;
-
-    // Performance-overlay stats (compact version of FFmpegVideoDecoder's). Decode/network stats are
-    // updated on the decode thread in submitDecodeUnit; render stats come from the main thread via
-    // atomics folded in at each 1-second window flip.
-    VIDEO_STATS m_ActiveWndVideoStats = {};
-    VIDEO_STATS m_LastWndVideoStats = {};
-    BandwidthTracker m_BwTracker;
-    uint32_t m_LastFrameNumber;
-    std::atomic<uint32_t> m_RenderedFrames;
-    std::atomic<uint64_t> m_TotalRenderTimeUs;
+    int m_LastFrameNumber;
 
     // Performance/status overlay compositing (same model as PlVkRenderer): notifyOverlayUpdated
     // uploads text surfaces to staging textures; renderFrameOnMainThread promotes + composites them.
@@ -181,6 +180,52 @@ private:
         bool hasStagingOverlay = false;
         pl_overlay stagingOverlay = {};
     } m_Overlays[Overlay::OverlayMax];
+
+  #ifndef IMGUI_DISABLE
+    // ImGui dev UI on the libplacebo device. imgui_impl_vulkan renders into m_ImGuiTex (an
+    // offscreen renderable+sampleable pl_tex at drawable size) via our own render pass and
+    // command buffer; the texture is then composited by pl_render_image as a pl_overlay.
+    // Cross-use sync rides the existing m_PlSem timeline via pl_vulkan_hold_ex/release_ex.
+    // All Vulkan entry points are runtime-resolved (required on macOS, harmless elsewhere).
+    struct ImGuiVkFuncs {
+        PFN_vkGetDeviceQueue GetDeviceQueue;
+        PFN_vkCreateCommandPool CreateCommandPool;
+        PFN_vkDestroyCommandPool DestroyCommandPool;
+        PFN_vkAllocateCommandBuffers AllocateCommandBuffers;
+        PFN_vkCreateFence CreateFence;
+        PFN_vkDestroyFence DestroyFence;
+        PFN_vkWaitForFences WaitForFences;
+        PFN_vkResetFences ResetFences;
+        PFN_vkCreateRenderPass CreateRenderPass;
+        PFN_vkDestroyRenderPass DestroyRenderPass;
+        PFN_vkCreateImageView CreateImageView;
+        PFN_vkDestroyImageView DestroyImageView;
+        PFN_vkCreateFramebuffer CreateFramebuffer;
+        PFN_vkDestroyFramebuffer DestroyFramebuffer;
+        PFN_vkBeginCommandBuffer BeginCommandBuffer;
+        PFN_vkEndCommandBuffer EndCommandBuffer;
+        PFN_vkCmdBeginRenderPass CmdBeginRenderPass;
+        PFN_vkCmdEndRenderPass CmdEndRenderPass;
+        PFN_vkQueueSubmit QueueSubmit;
+    };
+
+    bool ensureImGuiTarget(int w, int h);
+    bool renderImGuiOverlay(int dw, int dh, pl_overlay* overlay, pl_overlay_part* part);
+
+    bool m_ImGuiInited = false;   // full init (context + backend) succeeded
+    bool m_ImGuiFailed = false;   // init failed once; don't retry every frame
+    ImGuiVkFuncs m_ImGuiFn = {};
+    uint32_t m_ImGuiFamily = 0;
+    VkQueue m_ImGuiQueue = VK_NULL_HANDLE;
+    VkCommandPool m_ImGuiPool = VK_NULL_HANDLE;
+    VkCommandBuffer m_ImGuiCmd = VK_NULL_HANDLE;
+    VkFence m_ImGuiFence = VK_NULL_HANDLE;
+    bool m_ImGuiFenceArmed = false;
+    VkRenderPass m_ImGuiRp = VK_NULL_HANDLE;
+    pl_tex m_ImGuiTex = nullptr;
+    VkImageView m_ImGuiView = VK_NULL_HANDLE;
+    VkFramebuffer m_ImGuiFb = VK_NULL_HANDLE;
+  #endif
 };
 
 #endif  // HAVE_PYROWAVE

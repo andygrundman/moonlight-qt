@@ -40,7 +40,7 @@ inline constexpr std::array<PlotDesc, PlotCount> kPlotDescs = {{
     {"Dropped frames (network)",  PLOT_LABEL_TOTAL_INT,       "", -1.0f, 3.0f,   kNoValue, kNoValue},
     {"Dropped frames (pacing)",   PLOT_LABEL_TOTAL_INT,       "", -1.0f, 3.0f,   kNoValue, kNoValue},
 	{"Frames queued",             PLOT_LABEL_MIN_MAX_AVG_INT, "",  0.0f, 4.0f,   kNoValue, kNoValue},
-    {"Video stream",              PLOT_LABEL_MIN_MAX_AVG, "Mbps", -0.1f, 200.0f, kNoValue, kNoValue},
+    {"Video stream",              PLOT_LABEL_MIN_MAX_AVG, "Mbps", -0.1f, 500.0f, kNoValue, kNoValue},
     {"Present delay",             PLOT_LABEL_MIN_MAX_AVG,   "ms", -0.1f, 65.0f,  kNoValue, 64.0f},
 }};
 

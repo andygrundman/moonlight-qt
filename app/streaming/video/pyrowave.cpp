@@ -18,6 +18,16 @@
     #include <drm_fourcc.h>
   #endif
 
+  #ifndef IMGUI_DISABLE
+    #include "imgui.h"
+    #include "imgui_impl_sdl2.h"
+    #include "imgui_impl_vulkan.h"
+    #include "imgui/imgui_plots.h"
+    #include "imgui/devui.h"
+    #include "imgui/gamepadmenu.h"
+    #include "streaming/stats.h"
+  #endif
+
   #include <cstring>
   #include <vector>
 
@@ -64,7 +74,7 @@ PyroWaveVideoDecoder::PyroWaveVideoDecoder(bool testOnly)
       m_Swapchain(nullptr), m_Renderer(nullptr), m_DestroySurface(nullptr),
       m_PlSem(VK_NULL_HANDLE), m_SyncObj(nullptr), m_PwSem(VK_NULL_HANDLE),
       m_TlNext(0), m_LastHoldVal(0), m_LastReleaseVal(0), m_TimelineReady(false),
-      m_FrameReady(false), m_LastFrameNumber(0), m_RenderedFrames(0), m_TotalRenderTimeUs(0),
+      m_FrameReady(false), m_LastFrameNumber(0),
       m_OverlayLock(0) {}
 
 PyroWaveVideoDecoder::~PyroWaveVideoDecoder() {
@@ -74,6 +84,13 @@ PyroWaveVideoDecoder::~PyroWaveVideoDecoder() {
     if (!m_TestOnly && Session::get() != nullptr) {
         Session::get()->getOverlayManager().setOverlayRenderer(nullptr);
     }
+
+#ifndef IMGUI_DISABLE
+    // Tear down the ImGui context + Vulkan backend before the libplacebo GPU that backs it.
+    if (m_ImGuiInited) {
+        ImGuiPlots::instance().ImGui_deinit(this);
+    }
+#endif
 
     if (m_Decoder) {
         pyrowave_decoder_destroy(m_Decoder);  // ensures PyroWave GPU is idle
@@ -816,6 +833,353 @@ void PyroWaveVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type) {
     SDL_AtomicUnlock(&m_OverlayLock);
 }
 
+#ifndef IMGUI_DISABLE
+
+// (Re)create the offscreen ImGui render target at the current drawable size. The render pass is
+// created once on first use (the pl_fmt, and thus VkFormat, never changes afterwards).
+bool PyroWaveVideoDecoder::ensureImGuiTarget(int w, int h) {
+    if (m_ImGuiTex && m_ImGuiTex->params.w == w && m_ImGuiTex->params.h == h) {
+        return true;
+    }
+    VkDevice dev = m_Vulkan->device;
+
+    // Drop any previous target. Our last draw into it is fenced; libplacebo defers destruction
+    // of in-flight textures internally.
+    if (m_ImGuiFenceArmed) {
+        m_ImGuiFn.WaitForFences(dev, 1, &m_ImGuiFence, VK_TRUE, UINT64_MAX);
+    }
+    if (m_ImGuiFb) {
+        m_ImGuiFn.DestroyFramebuffer(dev, m_ImGuiFb, nullptr);
+        m_ImGuiFb = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiView) {
+        m_ImGuiFn.DestroyImageView(dev, m_ImGuiView, nullptr);
+        m_ImGuiView = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiTex) {
+        pl_tex_destroy(m_Vulkan->gpu, &m_ImGuiTex);
+    }
+
+    pl_fmt fmt = pl_find_fmt(m_Vulkan->gpu, PL_FMT_UNORM, 4, 8, 8,
+                             (enum pl_fmt_caps) (PL_FMT_CAP_SAMPLEABLE | PL_FMT_CAP_RENDERABLE));
+    if (!fmt) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: no renderable RGBA8 format for ImGui");
+        return false;
+    }
+    pl_tex_params tp = {};
+    tp.w = w;
+    tp.h = h;
+    tp.format = fmt;
+    tp.sampleable = true;
+    tp.renderable = true;
+    m_ImGuiTex = pl_tex_create(m_Vulkan->gpu, &tp);
+    if (!m_ImGuiTex) {
+        return false;
+    }
+    VkFormat vkFmt = VK_FORMAT_UNDEFINED;
+    VkImage img = pl_vulkan_unwrap(m_Vulkan->gpu, m_ImGuiTex, &vkFmt, nullptr);
+    if (!img) {
+        return false;
+    }
+
+    if (!m_ImGuiRp) {
+        VkAttachmentDescription att{};
+        att.format = vkFmt;
+        att.samples = VK_SAMPLE_COUNT_1_BIT;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;  // clear to transparent every frame
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // must match release_ex below
+        VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sub{};
+        sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sub.colorAttachmentCount = 1;
+        sub.pColorAttachments = &ref;
+        VkSubpassDependency dep{};
+        dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep.dstSubpass = 0;
+        dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.srcAccessMask = 0;
+        dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        VkRenderPassCreateInfo rci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rci.attachmentCount = 1;
+        rci.pAttachments = &att;
+        rci.subpassCount = 1;
+        rci.pSubpasses = &sub;
+        rci.dependencyCount = 1;
+        rci.pDependencies = &dep;
+        if (m_ImGuiFn.CreateRenderPass(dev, &rci, nullptr, &m_ImGuiRp) != VK_SUCCESS) {
+            return false;
+        }
+    }
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = img;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = vkFmt;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (m_ImGuiFn.CreateImageView(dev, &vci, nullptr, &m_ImGuiView) != VK_SUCCESS) {
+        return false;
+    }
+    VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fci.renderPass = m_ImGuiRp;
+    fci.attachmentCount = 1;
+    fci.pAttachments = &m_ImGuiView;
+    fci.width = (uint32_t) w;
+    fci.height = (uint32_t) h;
+    fci.layers = 1;
+    return m_ImGuiFn.CreateFramebuffer(dev, &fci, nullptr, &m_ImGuiFb) == VK_SUCCESS;
+}
+
+void PyroWaveVideoDecoder::ImGui_initBackend() {
+    PFN_vkGetInstanceProcAddr gipa = m_PlVkInstance->get_proc_addr;
+    VkInstance inst = m_PlVkInstance->instance;
+    VkDevice dev = m_Vulkan->device;
+
+  #define PW_IMGUI_PFN(name) \
+    m_ImGuiFn.name = (PFN_vk##name) gipa(inst, "vk" #name); \
+    if (!m_ImGuiFn.name) return
+    PW_IMGUI_PFN(GetDeviceQueue);
+    PW_IMGUI_PFN(CreateCommandPool);
+    PW_IMGUI_PFN(DestroyCommandPool);
+    PW_IMGUI_PFN(AllocateCommandBuffers);
+    PW_IMGUI_PFN(CreateFence);
+    PW_IMGUI_PFN(DestroyFence);
+    PW_IMGUI_PFN(WaitForFences);
+    PW_IMGUI_PFN(ResetFences);
+    PW_IMGUI_PFN(CreateRenderPass);
+    PW_IMGUI_PFN(DestroyRenderPass);
+    PW_IMGUI_PFN(CreateImageView);
+    PW_IMGUI_PFN(DestroyImageView);
+    PW_IMGUI_PFN(CreateFramebuffer);
+    PW_IMGUI_PFN(DestroyFramebuffer);
+    PW_IMGUI_PFN(BeginCommandBuffer);
+    PW_IMGUI_PFN(EndCommandBuffer);
+    PW_IMGUI_PFN(CmdBeginRenderPass);
+    PW_IMGUI_PFN(CmdEndRenderPass);
+    PW_IMGUI_PFN(QueueSubmit);
+  #undef PW_IMGUI_PFN
+
+    m_ImGuiFamily = m_Vulkan->queue_graphics.index;
+    m_ImGuiFn.GetDeviceQueue(dev, m_ImGuiFamily, 0, &m_ImGuiQueue);
+
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.queueFamilyIndex = m_ImGuiFamily;
+    pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    if (m_ImGuiFn.CreateCommandPool(dev, &pci, nullptr, &m_ImGuiPool) != VK_SUCCESS) {
+        return;
+    }
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = m_ImGuiPool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    if (m_ImGuiFn.AllocateCommandBuffers(dev, &cai, &m_ImGuiCmd) != VK_SUCCESS) {
+        return;
+    }
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (m_ImGuiFn.CreateFence(dev, &fci, nullptr, &m_ImGuiFence) != VK_SUCCESS) {
+        return;
+    }
+
+    int dw = 0, dh = 0;
+    SDL_Vulkan_GetDrawableSize(m_Window, &dw, &dh);
+    if (!ensureImGuiTarget(SDL_max(dw, 1), SDL_max(dh, 1))) {
+        return;
+    }
+
+    struct LoaderCtx {
+        PFN_vkGetInstanceProcAddr gipa;
+        VkInstance inst;
+    } lctx{gipa, inst};
+    if (!ImGui_ImplVulkan_LoadFunctions(m_Vulkan->api_version,
+            [](const char* name, void* ud) {
+                LoaderCtx* c = (LoaderCtx*) ud;
+                return c->gipa(c->inst, name);
+            }, &lctx)) {
+        return;
+    }
+
+    ImGui_ImplVulkan_InitInfo ii = {};
+    ii.ApiVersion = m_Vulkan->api_version;
+    ii.Instance = inst;
+    ii.PhysicalDevice = m_Vulkan->phys_device;
+    ii.Device = dev;
+    ii.QueueFamily = m_ImGuiFamily;
+    ii.Queue = m_ImGuiQueue;
+    ii.DescriptorPoolSize = 64;  // backend creates its own pool
+    ii.MinImageCount = 2;
+    ii.ImageCount = 2;
+    ii.PipelineInfoMain.RenderPass = m_ImGuiRp;
+    ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    if (!ImGui_ImplVulkan_Init(&ii)) {
+        return;
+    }
+    ImGui_ImplSDL2_InitForVulkan(m_Window);
+    m_ImGuiInited = true;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: ImGui Vulkan backend initialized");
+}
+
+void PyroWaveVideoDecoder::ImGui_deinitBackend() {
+    if (!m_Vulkan) {
+        return;
+    }
+    VkDevice dev = m_Vulkan->device;
+
+    // Drain libplacebo's use of the overlay texture and our own fenced draw before destroying
+    // anything ImGui's pipeline or our render pass reference.
+    pl_gpu_finish(m_Vulkan->gpu);
+    if (m_ImGuiFenceArmed) {
+        m_ImGuiFn.WaitForFences(dev, 1, &m_ImGuiFence, VK_TRUE, UINT64_MAX);
+        m_ImGuiFenceArmed = false;
+    }
+
+    if (ImGui::GetIO().BackendRendererUserData) {
+        ImGui_ImplVulkan_Shutdown();
+    }
+    if (ImGui::GetIO().BackendPlatformUserData) {
+        ImGui_ImplSDL2_Shutdown();
+    }
+
+    if (m_ImGuiFb) {
+        m_ImGuiFn.DestroyFramebuffer(dev, m_ImGuiFb, nullptr);
+        m_ImGuiFb = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiView) {
+        m_ImGuiFn.DestroyImageView(dev, m_ImGuiView, nullptr);
+        m_ImGuiView = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiTex) {
+        pl_tex_destroy(m_Vulkan->gpu, &m_ImGuiTex);
+    }
+    if (m_ImGuiRp) {
+        m_ImGuiFn.DestroyRenderPass(dev, m_ImGuiRp, nullptr);
+        m_ImGuiRp = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiFence) {
+        m_ImGuiFn.DestroyFence(dev, m_ImGuiFence, nullptr);
+        m_ImGuiFence = VK_NULL_HANDLE;
+    }
+    if (m_ImGuiPool) {
+        m_ImGuiFn.DestroyCommandPool(dev, m_ImGuiPool, nullptr);  // frees m_ImGuiCmd too
+        m_ImGuiPool = VK_NULL_HANDLE;
+        m_ImGuiCmd = VK_NULL_HANDLE;
+    }
+    m_ImGuiInited = false;
+}
+
+// Build this frame's dev UI and render it into m_ImGuiTex. Returns true (and fills *overlay)
+// when there is something to composite. The hold/release pair keeps ownership of the texture
+// balanced with libplacebo: hold's semaphore fires when pl's last sampling finished (WAR), our
+// submit waits it and signals a new value that release hands to pl to wait on (RAW).
+bool PyroWaveVideoDecoder::renderImGuiOverlay(int dw, int dh, pl_overlay* overlay, pl_overlay_part* part) {
+    if (!m_ImGuiInited || !ensureImGuiTarget(dw, dh)) {
+        return false;
+    }
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGui::NewFrame();
+
+    // The overlay is declared sRGB; libplacebo adapts it to the swapchain colorspace (incl. HDR).
+    DevUIColors.InitColors(OUTPUT_IS_SDR);
+    Stats::instance().RenderGraphs();
+    DevUISettings::instance().Render();
+    GamepadMenu::instance().Render();
+
+    ImGui::Render();
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (!drawData || drawData->CmdListsCount == 0) {
+        return false;  // no visible UI this frame; skip the GPU work entirely
+    }
+
+    VkDevice dev = m_Vulkan->device;
+
+    uint64_t waitVal = ++m_TlNext;
+    struct pl_vulkan_hold_params hp{};
+    hp.tex = m_ImGuiTex;
+    hp.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    hp.qf = VK_QUEUE_FAMILY_IGNORED;
+    hp.semaphore = {m_PlSem, waitVal};
+    if (!pl_vulkan_hold_ex(m_Vulkan->gpu, &hp)) {
+        return false;
+    }
+
+    // Single command buffer in flight; recycle once the previous draw retired.
+    if (m_ImGuiFenceArmed) {
+        m_ImGuiFn.WaitForFences(dev, 1, &m_ImGuiFence, VK_TRUE, UINT64_MAX);
+        m_ImGuiFenceArmed = false;
+    }
+    m_ImGuiFn.ResetFences(dev, 1, &m_ImGuiFence);
+
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    m_ImGuiFn.BeginCommandBuffer(m_ImGuiCmd, &bi);
+    VkClearValue clear{};  // transparent black
+    VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rbi.renderPass = m_ImGuiRp;
+    rbi.framebuffer = m_ImGuiFb;
+    rbi.renderArea = {{0, 0}, {(uint32_t) dw, (uint32_t) dh}};
+    rbi.clearValueCount = 1;
+    rbi.pClearValues = &clear;
+    m_ImGuiFn.CmdBeginRenderPass(m_ImGuiCmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    ImGui_ImplVulkan_RenderDrawData(drawData, m_ImGuiCmd);
+    m_ImGuiFn.CmdEndRenderPass(m_ImGuiCmd);
+    m_ImGuiFn.EndCommandBuffer(m_ImGuiCmd);
+
+    uint64_t sigVal = ++m_TlNext;
+    VkTimelineSemaphoreSubmitInfo tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    tsi.waitSemaphoreValueCount = 1;
+    tsi.pWaitSemaphoreValues = &waitVal;
+    tsi.signalSemaphoreValueCount = 1;
+    tsi.pSignalSemaphoreValues = &sigVal;
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.pNext = &tsi;
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores = &m_PlSem;
+    si.pWaitDstStageMask = &waitStage;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &m_ImGuiCmd;
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores = &m_PlSem;
+    m_Vulkan->lock_queue(m_Vulkan, m_ImGuiFamily, 0);
+    VkResult res = m_ImGuiFn.QueueSubmit(m_ImGuiQueue, 1, &si, m_ImGuiFence);
+    m_Vulkan->unlock_queue(m_Vulkan, m_ImGuiFamily, 0);
+
+    struct pl_vulkan_release_params rp{};
+    rp.tex = m_ImGuiTex;
+    rp.qf = VK_QUEUE_FAMILY_IGNORED;
+    if (res != VK_SUCCESS) {
+        // Nothing was submitted: the image is still as hold left it. Give it straight back.
+        rp.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        pl_vulkan_release_ex(m_Vulkan->gpu, &rp);
+        return false;
+    }
+    m_ImGuiFenceArmed = true;
+    rp.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // render pass finalLayout
+    rp.semaphore = {m_PlSem, sigVal};
+    pl_vulkan_release_ex(m_Vulkan->gpu, &rp);
+
+    *part = {};
+    part->src = {0, 0, (float) dw, (float) dh};
+    part->dst = {0, 0, (float) dw, (float) dh};
+    *overlay = {};
+    overlay->tex = m_ImGuiTex;
+    overlay->mode = PL_OVERLAY_NORMAL;
+    overlay->coords = PL_OVERLAY_COORDS_DST_FRAME;
+    overlay->repr = pl_color_repr_rgb;
+    overlay->repr.alpha = PL_ALPHA_INDEPENDENT;  // ImGui renders straight (non-premultiplied) alpha
+    overlay->color = pl_color_space_srgb;
+    overlay->parts = part;
+    overlay->num_parts = 1;
+    return true;
+}
+
+#endif  // !IMGUI_DISABLE
+
 bool PyroWaveVideoDecoder::isHardwareAccelerated() { return true; }
 bool PyroWaveVideoDecoder::isAlwaysFullScreen() { return false; }
 bool PyroWaveVideoDecoder::isHdrSupported() { return true; }
@@ -830,139 +1194,31 @@ void PyroWaveVideoDecoder::setHdrMode(bool enabled) {
 }
 bool PyroWaveVideoDecoder::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO) { return false; }
 
-void PyroWaveVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst) {
-    dst.receivedFrames += src.receivedFrames;
-    dst.decodedFrames += src.decodedFrames;
-    dst.renderedFrames += src.renderedFrames;
-    dst.totalFrames += src.totalFrames;
-    dst.networkDroppedFrames += src.networkDroppedFrames;
-    dst.totalReassemblyTimeUs += src.totalReassemblyTimeUs;
-    dst.totalDecodeTimeUs += src.totalDecodeTimeUs;
-    dst.totalRenderTimeUs += src.totalRenderTimeUs;
-    if (dst.minHostProcessingLatency == 0) {
-        dst.minHostProcessingLatency = src.minHostProcessingLatency;
-    } else if (src.minHostProcessingLatency != 0) {
-        dst.minHostProcessingLatency = qMin(dst.minHostProcessingLatency, src.minHostProcessingLatency);
-    }
-    dst.maxHostProcessingLatency = qMax(dst.maxHostProcessingLatency, src.maxHostProcessingLatency);
-    dst.totalHostProcessingLatency += src.totalHostProcessingLatency;
-    dst.framesWithHostProcessingLatency += src.framesWithHostProcessingLatency;
-
-    if (!LiGetEstimatedRttInfo(&dst.lastRtt, &dst.lastRttVariance)) {
-        dst.lastRtt = 0;
-        dst.lastRttVariance = 0;
-    }
-    if (!dst.measurementStartUs) {
-        dst.measurementStartUs = src.measurementStartUs;
-    }
-    double timeDiffSecs = (double) (LiGetMicroseconds() - dst.measurementStartUs) / 1000000.0;
-    if (timeDiffSecs > 0) {
-        dst.totalFps = (double) dst.totalFrames / timeDiffSecs;
-        dst.receivedFps = (double) dst.receivedFrames / timeDiffSecs;
-        dst.decodedFps = (double) dst.decodedFrames / timeDiffSecs;
-        dst.renderedFps = (double) dst.renderedFrames / timeDiffSecs;
-    }
-}
-
-void PyroWaveVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, int length) {
-    int offset = 0;
-    output[0] = 0;
-    int ret;
-
-    if (stats.receivedFps > 0) {
-        ret = snprintf(&output[offset], length - offset,
-                       "Video stream: %dx%d %.2f FPS (Codec: PyroWave %s%s)\n"
-                       "Bitrate: %.1f Mbps, Peak (%us): %.1f\n"
-                       "Incoming frame rate from network: %.2f FPS\n"
-                       "Decoding frame rate: %.2f FPS\n"
-                       "Rendering frame rate: %.2f FPS\n",
-                       m_Width, m_Height, stats.totalFps, m_YUV444 ? "4:4:4" : "4:2:0",
-                       m_TenBit ? (m_HdrEnabled.load() ? " 10-bit HDR" : " 10-bit") : "",
-                       m_BwTracker.GetAverageMbps(), m_BwTracker.GetWindowSeconds(), m_BwTracker.GetPeakMbps(),
-                       stats.receivedFps, stats.decodedFps, stats.renderedFps);
-        if (ret < 0 || ret >= length - offset) return;
-        offset += ret;
-    }
-    if (stats.framesWithHostProcessingLatency > 0) {
-        ret = snprintf(&output[offset], length - offset,
-                       "Host processing latency min/max/average: %.1f/%.1f/%.1f ms\n",
-                       (float) stats.minHostProcessingLatency / 10,
-                       (float) stats.maxHostProcessingLatency / 10,
-                       (float) stats.totalHostProcessingLatency / 10 / stats.framesWithHostProcessingLatency);
-        if (ret < 0 || ret >= length - offset) return;
-        offset += ret;
-    }
-    if (stats.renderedFrames != 0) {
-        char rttString[32];
-        if (stats.lastRtt != 0) {
-            snprintf(rttString, sizeof(rttString), "%u ms (variance: %u ms)", stats.lastRtt, stats.lastRttVariance);
-        } else {
-            snprintf(rttString, sizeof(rttString), "N/A");
-        }
-        ret = snprintf(&output[offset], length - offset,
-                       "Frames dropped by your network connection: %.2f%%\n"
-                       "Average network latency: %s\n"
-                       "Average reassembly/decoding time: %.2f/%.2f ms\n"
-                       "Average rendering time (including monitor V-sync latency): %.2f ms\n",
-                       stats.totalFrames ? (float) stats.networkDroppedFrames / stats.totalFrames * 100 : 0.0f,
-                       rttString,
-                       stats.decodedFrames ? (double) (stats.totalReassemblyTimeUs / 1000.0) / stats.decodedFrames : 0.0,
-                       stats.decodedFrames ? (double) (stats.totalDecodeTimeUs / 1000.0) / stats.decodedFrames : 0.0,
-                       stats.renderedFrames ? (double) (stats.totalRenderTimeUs / 1000.0) / stats.renderedFrames : 0.0);
-        if (ret < 0 || ret >= length - offset) return;
-        offset += ret;
-    }
-}
-
 int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
+    // Detect breaks in the frame sequence indicating dropped packets
+	uint32_t droppedFramesNetwork = 0;
+
     // Per-frame performance stats + overlay text (mirrors FFmpegVideoDecoder).
     if (!m_LastFrameNumber) {
-        m_ActiveWndVideoStats.measurementStartUs = LiGetMicroseconds();
         m_LastFrameNumber = du->frameNumber;
     } else {
-        m_ActiveWndVideoStats.networkDroppedFrames += du->frameNumber - (m_LastFrameNumber + 1);
-        m_ActiveWndVideoStats.totalFrames += du->frameNumber - (m_LastFrameNumber + 1);
+        // Any frame number greater than m_LastFrameNumber + 1 represents a dropped frame
+        if (m_LastFrameNumber > 0 && du->frameNumber > (m_LastFrameNumber + 1)) {
+		    droppedFramesNetwork = du->frameNumber - (m_LastFrameNumber + 1);
+        }
         m_LastFrameNumber = du->frameNumber;
     }
 
-    // Flip stats windows roughly every second and refresh the overlay text if enabled.
-    if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 1000000) {
-        m_ActiveWndVideoStats.renderedFrames = m_RenderedFrames.exchange(0);
-        m_ActiveWndVideoStats.totalRenderTimeUs = m_TotalRenderTimeUs.exchange(0);
+    Stats::instance().SubmitVideoBytesAndReassemblyTime(du, droppedFramesNetwork);
 
-        if (Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug)) {
-            VIDEO_STATS lastTwoWndStats = {};
-            addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
-            addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
-            stringifyVideoStats(lastTwoWndStats,
-                                Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
-                                Session::get()->getOverlayManager().getOverlayMaxTextLength());
-            Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);
-        }
-
-        SDL_memcpy(&m_LastWndVideoStats, &m_ActiveWndVideoStats, sizeof(m_ActiveWndVideoStats));
-        SDL_zero(m_ActiveWndVideoStats);
-        m_ActiveWndVideoStats.measurementStartUs = LiGetMicroseconds();
+    // Flip stats windows roughly every second
+    if (Stats::instance().ShouldUpdateDisplay(
+        Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug),
+        Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
+        Session::get()->getOverlayManager().getOverlayMaxTextLength()))
+    {
+        Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);
     }
-
-    if (du->frameHostProcessingLatency != 0) {
-        if (m_ActiveWndVideoStats.minHostProcessingLatency != 0) {
-            m_ActiveWndVideoStats.minHostProcessingLatency = qMin(m_ActiveWndVideoStats.minHostProcessingLatency, du->frameHostProcessingLatency);
-        } else {
-            m_ActiveWndVideoStats.minHostProcessingLatency = du->frameHostProcessingLatency;
-        }
-        m_ActiveWndVideoStats.framesWithHostProcessingLatency += 1;
-    }
-    m_ActiveWndVideoStats.maxHostProcessingLatency = qMax(m_ActiveWndVideoStats.maxHostProcessingLatency, du->frameHostProcessingLatency);
-    m_ActiveWndVideoStats.totalHostProcessingLatency += du->frameHostProcessingLatency;
-    m_ActiveWndVideoStats.receivedFrames++;
-    m_ActiveWndVideoStats.totalFrames++;
-
-    m_BwTracker.AddBytes(du->fullLength);
-    // Reassembly (receive-to-enqueue) happens on the receive thread and is otherwise invisible here.
-    m_ActiveWndVideoStats.totalReassemblyTimeUs += (du->enqueueTimeUs - du->receiveTimeUs);
-
-    uint64_t decodeStartUs = LiGetMicroseconds();
 
     // Host frames the PyroWave packets as [u32 count]{[u32 size][bytes]}*; reassemble + re-push.
     std::vector<uint8_t> frame;
@@ -1026,8 +1282,7 @@ int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
         m_FrameReady = true;
     }
 
-    m_ActiveWndVideoStats.totalDecodeTimeUs += LiGetMicroseconds() - decodeStartUs;
-    m_ActiveWndVideoStats.decodedFrames++;
+    Stats::instance().SubmitDecodeTimeUs(LiGetMicroseconds() - du->enqueueTimeUs);
 
     SDL_Event event;
     SDL_zero(event);
@@ -1038,7 +1293,6 @@ int PyroWaveVideoDecoder::submitDecodeUnit(PDECODE_UNIT du) {
 }
 
 void PyroWaveVideoDecoder::renderFrameOnMainThread() {
-    uint64_t renderStartUs = LiGetMicroseconds();
     {
         std::lock_guard<std::mutex> lock(m_FrameLock);
         if (!m_FrameReady) {
@@ -1046,6 +1300,19 @@ void PyroWaveVideoDecoder::renderFrameOnMainThread() {
         }
         m_FrameReady = false;
     }
+
+#ifndef IMGUI_DISABLE
+    // Lazy ImGui bring-up on the render (main) thread, mirroring FramePacer's renderThread init
+    // for the FFmpeg renderers. ImGui_init creates the context and calls ImGui_initBackend().
+    if (!m_ImGuiInited && !m_ImGuiFailed) {
+        ImGuiPlots::instance().ImGui_init(this);
+        if (!m_ImGuiInited) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "PyroWave: ImGui Vulkan backend init failed");
+            ImGuiPlots::instance().ImGui_deinit(this);
+            m_ImGuiFailed = true;
+        }
+    }
+#endif
 
     // Reacquire the plane textures from external (PyroWave) use, GPU-waiting on the decode-done
     // timeline value (RAW). Always paired with the hold_ex below so ownership state stays balanced.
@@ -1143,6 +1410,16 @@ void PyroWaveVideoDecoder::renderFrameOnMainThread() {
             }
             SDL_AtomicUnlock(&m_OverlayLock);
 
+#ifndef IMGUI_DISABLE
+            // Dev UI (graphs/tools) rendered via imgui_impl_vulkan into its own texture, then
+            // composited by libplacebo along with the text overlays above.
+            pl_overlay imguiOverlay;
+            pl_overlay_part imguiPart;
+            if (m_ImGuiInited && renderImGuiOverlay(dw, dh, &imguiOverlay, &imguiPart)) {
+                overlays.push_back(imguiOverlay);
+            }
+#endif
+
             struct pl_frame src = {};
             src.num_planes = 3;
             for (int i = 0; i < 3; i++) {
@@ -1182,9 +1459,6 @@ void PyroWaveVideoDecoder::renderFrameOnMainThread() {
         pl_vulkan_hold_ex(m_Vulkan->gpu, &hp);
         m_LastHoldVal.store(v);
     }
-
-    m_TotalRenderTimeUs.fetch_add(LiGetMicroseconds() - renderStartUs);
-    m_RenderedFrames.fetch_add(1);
 }
 
 #endif  // HAVE_PYROWAVE

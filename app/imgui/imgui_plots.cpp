@@ -64,7 +64,7 @@ float ImGuiPlots::observeFloatReturnAvg(int plotId, float value)
 
 #ifndef IMGUI_DISABLE
 
-void ImGuiPlots::ImGui_init(IFFmpegRenderer* renderer)
+void ImGuiPlots::ImGui_init(IImGuiBackend* renderer)
 {
     // Setup ImGui
     IMGUI_CHECKVERSION();
@@ -92,7 +92,7 @@ void ImGuiPlots::ImGui_init(IFFmpegRenderer* renderer)
     renderer->ImGui_initBackend();
 }
 
-void ImGuiPlots::ImGui_deinit(IFFmpegRenderer* renderer)
+void ImGuiPlots::ImGui_deinit(IImGuiBackend* renderer)
 {
     renderer->ImGui_deinitBackend();
 

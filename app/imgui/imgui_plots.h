@@ -1,7 +1,7 @@
 #pragma once
 #include "plotdesc.h"
+#include "imgui_backend.h"
 #include "streaming/floatbuffer.h"
-#include "streaming/video/ffmpeg-renderers/renderer.h"
 
 #include <array>
 
@@ -18,8 +18,8 @@ class ImGuiPlots
     static ImGuiPlots& instance();
 
 #ifndef IMGUI_DISABLE
-    void ImGui_init(IFFmpegRenderer* renderer);
-    void ImGui_deinit(IFFmpegRenderer* renderer);
+    void ImGui_init(IImGuiBackend* renderer);
+    void ImGui_deinit(IImGuiBackend* renderer);
 #endif
 
     bool isEnabled()

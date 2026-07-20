@@ -6,6 +6,7 @@
 
 #include "streaming/video/decoder.h"
 #include "streaming/video/overlaymanager.h"
+#include "imgui/imgui_backend.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -137,7 +138,7 @@ private:
 #define RENDERER_ATTRIBUTE_NO_BUFFERING 0x08
 #define RENDERER_ATTRIBUTE_FORCE_PACING 0x10
 
-class IFFmpegRenderer : public Overlay::IOverlayRenderer {
+class IFFmpegRenderer : public Overlay::IOverlayRenderer, public IImGuiBackend {
 public:
     enum class RendererType {
         Unknown,
@@ -548,12 +549,7 @@ public:
     }
 #endif
 
-    virtual void ImGui_initBackend() {
-    }
-
-    virtual void ImGui_deinitBackend() {
-    }
-
+    // ImGui_initBackend()/ImGui_deinitBackend() hooks are inherited from IImGuiBackend
 
 protected:
     InitFailureReason m_InitFailureReason;

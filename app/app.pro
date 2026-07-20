@@ -265,6 +265,7 @@ HEADERS += \
     imgui/devui.h \
     imgui/gamepadmenu.h \
     imgui/plotdesc.h \
+    imgui/imgui_backend.h \
     imgui/imgui_plots.h \
     streaming/stats.h
 
@@ -306,6 +307,13 @@ pyrowave {
 
     SOURCES += streaming/video/pyrowave.cpp
     HEADERS += streaming/video/pyrowave.h
+
+    # ImGui Vulkan renderer backend for the dev UI on the PyroWave present path. Compiled here
+    # (not in the imgui static lib) so it sees the same Vulkan headers as pyrowave.cpp. All
+    # Vulkan functions are runtime-loaded via ImGui_ImplVulkan_LoadFunctions (required on macOS
+    # where MoltenVK is loaded through SDL; harmless on Linux).
+    SOURCES += $$PWD/../imgui/imgui/backends/imgui_impl_vulkan.cpp
+    DEFINES += IMGUI_IMPL_VULKAN_NO_PROTOTYPES
 
     macx {
         # macOS uses the shared-VkDevice path (MoltenVK has no dmabuf/external-fd interop):

@@ -357,6 +357,32 @@ void Stats::formatVideoStats(VIDEO_STATS& stats, char* output, size_t length)
             }
             break;
 
+        case VIDEO_FORMAT_PYROWAVE:
+            codecString = "PyroWave";
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE_444:
+            codecString = "PyroWave 4:4:4";
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE10_420:
+            if (LiGetCurrentHostDisplayHdrMode()) {
+                codecString = "PyroWave 10-bit HDR";
+            }
+            else {
+                codecString = "PyroWave 10-bit SDR";
+            }
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE10_444:
+            if (LiGetCurrentHostDisplayHdrMode()) {
+                codecString = "PyroWave 10-bit HDR 4:4:4";
+            }
+            else {
+                codecString = "PyroWave 10-bit SDR 4:4:4";
+            }
+            break;
+
         default:
             codecString = "UNKNOWN";
             break;
@@ -702,7 +728,15 @@ void Stats::RenderGraphs()
 
                 int axFlags = ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoSideSwitch | ImPlotAxisFlags_NoHighlight;
                 ImPlot::SetupAxes(nullptr, nullptr, axFlags, axFlags);
-                ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0f, 65.0f, ImGuiCond_Always);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, (double) countF - 1.0, ImGuiCond_Always);
+
+                if (scaleMin != FLT_MAX && scaleMax != FLT_MAX) {
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, scaleMin, scaleMax, ImGuiCond_Always);
+                }
+                else {
+                    double pad = std::max(1.0f, (maxY - minY) * 0.1f);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, minY - pad, maxY + pad, ImGuiCond_Always);
+                }
 
                 clampData ctx {buffers[selectedPlot], plot.desc.clampMax};
                 ImPlot::PlotLineG(plot.desc.unit, clampGetter, &ctx, (int) countF, spec);
