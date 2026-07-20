@@ -63,7 +63,7 @@ macx:!disable-prebuilts {
 
 unix:if(!macx|disable-prebuilts) {
     CONFIG += link_pkgconfig
-    PKGCONFIG += openssl sdl2 SDL2_ttf
+    PKGCONFIG += openssl sdl2 SDL2_ttf pyrowave
 
     # We have our own optimized libopus.a for Steam Link
     if(!config_SL|disable-prebuilts) {
@@ -162,7 +162,7 @@ macx {
     }
 
     LIBS += -lobjc -framework VideoToolbox -framework AVFoundation -framework CoreVideo -framework CoreGraphics -framework CoreMedia -framework AppKit -framework Metal -framework QuartzCore
-    CONFIG += ffmpeg
+    CONFIG += ffmpeg pyrowave
 }
 
 SOURCES += \

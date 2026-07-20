@@ -18,9 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows
-          - os: windows-2025
-            qt_version: 6.11.1
+          # # Windows
+          # - os: windows-2025
+          #   qt_version: 6.11.1
           # macOS
           - os: macos-26
             qt_version: 6.11.1
@@ -80,6 +80,14 @@ jobs:
           scripts\build-arch.bat Release arm64
         env:
           QT_PATH: ${{ runner.workspace }}\Qt\${{ matrix.qt_version }}\msvc2022_arm64\bin
+
+      - name: Build PyroWave
+        if: runner.os == 'macOS'
+        working-directory: pyrowave
+        run: |
+          ./checkout_granite.sh
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
 
       - name: Build Package
         shell: pwsh

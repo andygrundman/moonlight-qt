@@ -5,10 +5,8 @@ permissions:
 
 on:
   push:
-  pull_request:
     branches:
-      - master
-  workflow_dispatch:
+      - andyg.pyrowave-macos
 
 concurrency:
   group: build-${{ github.ref }}
@@ -33,11 +31,15 @@ jobs:
     with:
       ci_version: ${{ needs.setup.outputs.ci_version }}
 
-  # Fork note: upstream also runs build-steamlink (not targeted by this fork) and
-  # build-win-mac here. Windows/macOS builds are currently disabled; re-enable by
-  # restoring a job like:
-  #   build-windows-macos:
-  #     needs: setup
-  #     uses: ./.github/workflows/build-win-mac.yml
-  #     with:
-  #       ci_version: ${{ needs.setup.outputs.ci_version }}
+  # build-steamlink:
+  #   needs: setup
+  #   uses: ./.github/workflows/build-steamlink.yml
+  #   with:
+  #     ci_version: ${{ needs.setup.outputs.ci_version }}
+
+  build-windows-macos:
+    needs: setup
+    uses: ./.github/workflows/build-win-mac.yml
+    with:
+      ci_version: ${{ needs.setup.outputs.ci_version }}
+
