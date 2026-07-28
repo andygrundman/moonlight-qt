@@ -105,6 +105,14 @@ void GamepadMenu::Render()
                  []() {
                      Stats::instance().SetShowGraphs(!Stats::instance().GetShowGraphs());
                  }},
+            #ifdef __APPLE__
+                 {ICON_FA_DISPLAY " Toggle Metal HUD",
+                 []() {
+                    DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
+                        config.showMetalHud = !config.showMetalHud;
+                    });
+                 }},
+            #endif
                 {ICON_FA_SLIDERS " Toggle advanced controls",
                  []() {
                     DevUISettings::instance().Toggle();
