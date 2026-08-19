@@ -1893,6 +1893,9 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     if (_note) {
         [[NSNotificationCenter defaultCenter] removeObserver:_note];
         _note = nil;
+    }
+    if (_note2) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_note2];
         _note2 = nil;
     }
 }
