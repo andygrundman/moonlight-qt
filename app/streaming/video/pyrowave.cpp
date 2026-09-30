@@ -755,6 +755,8 @@ bool PyroWaveVideoDecoder::initialize(PDECODER_PARAMETERS params) {
     }
 #endif
     m_TimelineReady = true;
+    // This decoder bypasses FramePacer, which normally sets the stream metadata.
+    Stats::instance().SetMetadata(params->videoFormat, m_Width, m_Height);
     // Composite the performance/status overlay on top of the video (same as the FFmpeg renderers).
     if (Session::get() != nullptr) {
         Session::get()->getOverlayManager().setOverlayRenderer(this);
