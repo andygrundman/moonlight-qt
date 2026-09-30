@@ -3,6 +3,8 @@
 #include <functional>
 #include <QQueue>
 #include <set>
+#include <memory>
+class PyroWaveMetalDecoder;
 
 #include "../bandwidth.h"
 #include "decoder.h"
@@ -92,6 +94,16 @@ private:
 
     void reset();
 
+    bool initializePyroWave(PDECODER_PARAMETERS params);
+    bool finishRenderingInitialization(PDECODER_PARAMETERS params, TestMode testMode);
+    int receiveFrame(AVFrame* frame);
+    bool m_PyroWaveActive = false;
+#ifdef HAVE_PYROWAVE_METAL
+    std::unique_ptr<PyroWaveMetalDecoder> m_PyroWave;
+#endif
+    QQueue<AVFrame*> m_PyroWaveOutput;
+    uint64_t m_PyroWaveLastErrorLogUs = 0;
+    uint32_t m_PyroWaveRejectedFrames = 0;
     void writeBuffer(PLENTRY entry, int& offset);
 
     static

@@ -293,11 +293,24 @@ ffmpeg {
         streaming/video/ffmpeg-renderers/framepacing/framepacer.h \
         streaming/video/ffmpeg-renderers/framepacing/framequeue.h
 }
-# PyroWave (Vulkan wavelet, intra-only) decoder. Off by default; enable with CONFIG+=pyrowave.
-# Requires the pyrowave submodule built via its own CMake (produces libpyrowave-shared) with
-# Granite fetched (pyrowave/checkout_granite.sh). See plan/docs for the build recipe.
-pyrowave {
-    message(PyroWave decoder selected)
+# PyroWave is opt-in with CONFIG+=pyrowave. macOS uses native Metal by default;
+# CONFIG+=pyrowave-vulkan retains the existing Vulkan backend. See README.pyrowave.
+pyrowave-vulkan: CONFIG += pyrowave
+macx:pyrowave:!pyrowave-vulkan {
+    DEFINES += HAVE_PYROWAVE HAVE_PYROWAVE_METAL
+    SOURCES += streaming/video/pyrowave/pyrowaveframing.cpp
+    OBJECTIVE_SOURCES += streaming/video/pyrowave/pyrowavemetal.mm
+    HEADERS += streaming/video/pyrowave/pyrowavemetal.h \
+               streaming/video/pyrowave/pyrowavedecoder.h \
+               streaming/video/pyrowave/pyrowaveframing.h
+    INCLUDEPATH += $$PWD/../pyrowave-metal/pyrowave/metal
+    LIBS += -L$$OUT_PWD/../pyrowave-metal -lpyrowave-metal -framework Metal -framework IOSurface
+    PRE_TARGETDEPS += $$OUT_PWD/../pyrowave-metal/libpyrowave-metal.a
+    CONFIG += pyrowave-metal
+    message(Native Metal PyroWave decoder selected)
+}
+pyrowave:!pyrowave-metal {
+    message(Vulkan PyroWave decoder selected)
 
     DEFINES += HAVE_PYROWAVE
 
@@ -664,7 +677,7 @@ macx {
         APP_BUNDLE_FRAMEWORKS.files = $$files(../libs/mac/Frameworks/*.framework, true) $$files(../libs/mac/lib/*.dylib, true)
         # Ship the PyroWave decoder library in the bundle so @rpath resolves it without the
         # build-tree rpath (also needed by its internal loader for the headless probe device).
-        pyrowave: APP_BUNDLE_FRAMEWORKS.files += $$files(../pyrowave/build/libpyrowave-shared*.dylib)
+        pyrowave:!pyrowave-metal: APP_BUNDLE_FRAMEWORKS.files += $$files(../pyrowave/build/libpyrowave-shared*.dylib)
         APP_BUNDLE_FRAMEWORKS.path = Contents/Frameworks
 
         QMAKE_BUNDLE_DATA += APP_BUNDLE_FRAMEWORKS

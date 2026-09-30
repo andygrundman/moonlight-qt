@@ -223,6 +223,8 @@ public:
         return 0;
     }
 
+    virtual void* getPyroWaveMetalDevice() { return nullptr; }
+
     virtual int getDecoderColorspace() {
         // Rec 601 is default
         return COLORSPACE_REC_601;

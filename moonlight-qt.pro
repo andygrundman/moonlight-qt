@@ -13,6 +13,12 @@ win32:!winrt {
     app.depends += AntiHooking
 }
 
+pyrowave-vulkan: CONFIG += pyrowave
+macx:pyrowave:!pyrowave-vulkan {
+    SUBDIRS += pyrowave-metal
+    app.depends += pyrowave-metal
+}
+
 # Support debug and release builds from command line for CI
 CONFIG += debug_and_release
 

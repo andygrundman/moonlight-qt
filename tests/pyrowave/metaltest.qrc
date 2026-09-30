@@ -1,0 +1,1 @@
+<RCC><qresource prefix="/data"><file alias="vt_renderer.metal">../../app/shaders/vt_renderer.metal</file></qresource></RCC>

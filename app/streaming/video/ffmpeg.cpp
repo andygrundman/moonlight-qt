@@ -1,5 +1,8 @@
 #include <Limelight.h>
 #include "ffmpeg.h"
+#ifdef HAVE_PYROWAVE_METAL
+#include "pyrowave/pyrowavedecoder.h"
+#endif
 #include "utils.h"
 #include "streaming/session.h"
 
@@ -61,7 +64,7 @@ extern "C" {
 
 bool FFmpegVideoDecoder::isHardwareAccelerated()
 {
-    return m_HwDecodeCfg != nullptr ||
+    return m_PyroWaveActive || m_HwDecodeCfg != nullptr ||
             (getAVCodecCapabilities(m_VideoDecoderCtx->codec) & AV_CODEC_CAP_HARDWARE) != 0;
 }
 
@@ -93,6 +96,9 @@ int FFmpegVideoDecoder::getDecoderCapabilities()
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Using decoder capability override: 0x%x",
                     capabilities);
+    }
+    else if (m_PyroWaveActive) {
+        capabilities = 0; // Intra frames require no reference invalidation or slices.
     }
     else {
         // Start with the backend renderer's capabilities
@@ -295,6 +301,17 @@ void FFmpegVideoDecoder::reset()
     delete m_BackendRenderer;
 
     m_FrontendRenderer = m_BackendRenderer = nullptr;
+    while (!m_PyroWaveOutput.isEmpty()) {
+        AVFrame* frame = m_PyroWaveOutput.dequeue();
+        av_frame_free(&frame);
+    }
+#ifdef HAVE_PYROWAVE_METAL
+    if (m_PyroWave) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave rejected %u frames", m_PyroWaveRejectedFrames);
+        m_PyroWave.reset();
+    }
+#endif
+    m_PyroWaveActive = false;
 
     if (m_CurrentTestMode != TestMode::TestFrameOnly) {
         Stats::instance().LogGlobalVideoStats();
@@ -492,6 +509,10 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         }
     }
 
+    if (decoder == nullptr) {
+        return finishRenderingInitialization(params, testMode);
+    }
+
     m_VideoDecoderCtx = avcodec_alloc_context3(decoder);
     if (!m_VideoDecoderCtx) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -661,7 +682,7 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
             err = avcodec_receive_frame_flags(m_VideoDecoderCtx, frame,
                                               AV_CODEC_RECEIVE_FRAME_FLAG_SYNCHRONOUS);
 #else
-            err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
+            err = receiveFrame(frame);
 #endif
             if (err == AVERROR(EAGAIN)) {
                 // Wait a little while to let the hardware work
@@ -701,6 +722,11 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         }
     }
 
+    return finishRenderingInitialization(params, testMode);
+}
+
+bool FFmpegVideoDecoder::finishRenderingInitialization(PDECODER_PARAMETERS params, TestMode testMode)
+{
     if (testMode != TestMode::TestFrameOnly) {
         if ((params->videoFormat & VIDEO_FORMAT_MASK_H264) &&
                 !(m_BackendRenderer->getDecoderCapabilities() & CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC)) {
@@ -1376,6 +1402,9 @@ bool FFmpegVideoDecoder::tryInitializeNonHwAccelDecoder(PDECODER_PARAMETERS para
 
 bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)
 {
+#ifdef HAVE_PYROWAVE_METAL
+    if (params->videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) return initializePyroWave(params);
+#endif
     // Increase log level until the first frame is decoded
     av_log_set_level(AV_LOG_DEBUG);
 
@@ -1603,7 +1632,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             int err;
             do {
-                err = avcodec_receive_frame(m_VideoDecoderCtx, frame);
+                err = receiveFrame(frame);
                 if (err == 0) {
                     SDL_assert(m_FrameInfoQueue.size() == m_FramesIn - m_FramesOut);
                     m_FramesOut++;
@@ -1753,7 +1782,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     SDL_assert(m_CurrentTestMode != TestMode::TestFrameOnly);
 
     // If this is the first frame, reject anything that's not an IDR frame
-    if (m_FramesIn == 0 && du->frameType != FRAME_TYPE_IDR) {
+    if (!m_PyroWaveActive && m_FramesIn == 0 && du->frameType != FRAME_TYPE_IDR) {
         return DR_NEED_IDR;
     }
 
@@ -1798,6 +1827,36 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         entry = entry->next;
     }
 
+#ifdef HAVE_PYROWAVE_METAL
+    if (m_PyroWaveActive) {
+        AVFrame* frame = av_frame_alloc();
+        if (!frame) return DR_OK;
+        if (!m_PyroWave->decode(reinterpret_cast<const uint8_t*>(m_DecodeBuffer.constData()), offset,
+                                {}, 0, frame)) {
+            av_frame_free(&frame);
+            ++m_PyroWaveRejectedFrames;
+            const auto now = LiGetMicroseconds();
+            if (now - m_PyroWaveLastErrorLogUs >= 1000000) {
+                m_PyroWaveLastErrorLogUs = now;
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "PyroWave dropped frame %d: %s (%u total)",
+                            du->frameNumber, m_PyroWave->lastError().c_str(), m_PyroWaveRejectedFrames);
+            }
+            return DR_OK;
+        }
+        frame->color_range = getDecoderColorRange() == COLOR_RANGE_FULL ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+        frame->colorspace = du->colorspace == COLORSPACE_REC_2020 ? AVCOL_SPC_BT2020_NCL :
+                            du->colorspace == COLORSPACE_REC_709 ? AVCOL_SPC_BT709 : AVCOL_SPC_SMPTE170M;
+        if ((m_VideoFormat & VIDEO_FORMAT_MASK_10BIT) && LiGetCurrentHostDisplayHdrMode()) {
+            frame->color_primaries = AVCOL_PRI_BT2020;
+            frame->color_trc = AVCOL_TRC_SMPTE2084;
+            frame->colorspace = AVCOL_SPC_BT2020_NCL;
+        }
+        m_PyroWaveOutput.enqueue(frame);
+        m_FrameInfoQueue.enqueue(*du);
+        ++m_FramesIn;
+        return DR_OK;
+    }
+#endif
     m_Pkt->data = reinterpret_cast<uint8_t*>(m_DecodeBuffer.data());
     m_Pkt->size = offset;
 
@@ -1846,3 +1905,65 @@ void FFmpegVideoDecoder::renderFrameOnMainThread()
     FramePacer::instance().renderOnMainThread();
 }
 
+
+bool FFmpegVideoDecoder::initializePyroWave(PDECODER_PARAMETERS params)
+{
+#ifdef HAVE_PYROWAVE_METAL
+    // PyroWave is a GPU codec with no software fallback
+    if (params->vds == StreamingPreferences::VDS_FORCE_SOFTWARE) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "PyroWave requires GPU decoding; ignoring the software decoding preference");
+    }
+
+    m_BackendRenderer = VTMetalRendererFactory::createRenderer(false);
+    if (!initializeRendererInternal(m_BackendRenderer, params)) {
+        delete m_BackendRenderer;
+        m_BackendRenderer = nullptr;
+        return false;
+    }
+
+    PyroWaveMetalDecoder::Config config;
+    config.width = params->width;
+    config.height = params->height;
+    config.chroma444 = (params->videoFormat & VIDEO_FORMAT_MASK_YUV444) != 0;
+    config.tenBit = (params->videoFormat & VIDEO_FORMAT_MASK_10BIT) != 0;
+    config.metalDevice = m_BackendRenderer->getPyroWaveMetalDevice();
+
+    m_PyroWave = std::make_unique<PyroWaveMetalDecoder>();
+    if (!m_PyroWave->initialize(config)) {
+        reset();
+        return false;
+    }
+    m_PyroWaveActive = true;
+
+    if (!completeInitialization(nullptr, AV_PIX_FMT_NONE, params,
+                                m_TestOnly ? TestMode::TestFrameOnly : TestMode::NoTesting,
+                                false)) {
+        reset();
+        return false;
+    }
+
+    if (!m_TestOnly) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "PyroWave decoding %dx%d %s %s",
+                    params->width, params->height,
+                    config.chroma444 ? "4:4:4" : "4:2:0",
+                    config.tenBit ? "10-bit" : "8-bit");
+    }
+    return true;
+#else
+    Q_UNUSED(params);
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "PyroWave decoding is not available in this build");
+    return false;
+#endif
+}
+
+int FFmpegVideoDecoder::receiveFrame(AVFrame* frame) {
+    if (!m_PyroWaveActive) return avcodec_receive_frame(m_VideoDecoderCtx, frame);
+    if (m_PyroWaveOutput.isEmpty()) return AVERROR(EAGAIN);
+    AVFrame* ready = m_PyroWaveOutput.dequeue();
+    av_frame_move_ref(frame, ready);
+    av_frame_free(&ready);
+    return 0;
+}

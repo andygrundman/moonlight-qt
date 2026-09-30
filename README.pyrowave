@@ -3,3 +3,38 @@ This is a quick-and-dirty AI-assisted proof of concept for PyroWave, to test int
 A more careful implementation will be done later if all goes well.
 
 Based on initial work done by azafrob.
+
+
+Native Metal on macOS
+====================
+
+CONFIG+=pyrowave now selects the upstream native Metal codec on macOS. Its output textures feed VTMetalRenderer through the existing FFmpegVideoDecoder decode-unit worker and FramePacer. Presentation, display-link timing, VRR policy, HDR metadata and the Metal dev UI therefore use the existing Metal path.
+
+Decoding and rendering share an MTLDevice and use separate command queues. A shared event orders texture reads after decode without waiting on the CPU. An AVFrame retains the texture pool slot; both decode completion and render completion hold references, so dropping a queued frame cannot recycle textures still in use by the GPU.
+
+Requirements: Apple Silicon for native PyroWave decoding, the normal Qt/macOS prebuilt dependencies, and the pyrowave-metal/pyrowave submodule. The universal binary still builds for Intel Macs, where conventional codecs remain available. Native PyroWave device probing fails on unsupported GPUs.
+
+Build from the repository root with Qt's qmake on PATH:
+
+    git submodule update --init --recursive
+    python3 setup-deps.py
+    mkdir -p build/macos-pyrowave
+    qmake moonlight-qt.pro -o build/macos-pyrowave/Makefile CONFIG+=pyrowave \
+        "QMAKE_APPLE_DEVICE_ARCHS=arm64 x86_64" QMAKE_MACOSX_DEPLOYMENT_TARGET=13.0
+    make -C build/macos-pyrowave -j8 release
+
+Use the existing PyroWave codec option in Settings or --video-codec PyroWave on the CLI. HDR and YUV444 choose the corresponding 10-bit and 4:4:4 profiles. CONFIG+=pyrowave-vulkan selects the existing MoltenVK/libplacebo implementation on macOS; its existing CMake/Granite build is still required. Linux CONFIG+=pyrowave continues using Vulkan. Builds without PyroWave are unchanged.
+
+The native framing parser validates sequence geometry, block indices, record lengths and padding before passing data to the codec. Both legacy length-prefixed frames and record-framed whole frames are accepted. The protocol submodule stays at the branch's existing revision: this change does not negotiate newer record-framing features, partial RTP recovery, or a bitstream revision check. Parser support for missing-packet segments is exercised in isolation, but the production bridge currently receives only complete frames from that protocol revision.
+
+Tests on an Apple Silicon Mac:
+
+    mkdir -p build/tests-pyrowave
+    qmake tests/pyrowave/pyrowave.pro -o build/tests-pyrowave/Makefile \
+        QMAKE_APPLE_DEVICE_ARCHS=arm64 QMAKE_MACOSX_DEPLOYMENT_TARGET=13.0
+    make -C build/tests-pyrowave -j8
+    build/tests-pyrowave/tst_pyrowaveprofiles
+    build/tests-pyrowave/tst_pyrowaveframing
+    DYLD_LIBRARY_PATH="$PWD/libs/mac/lib" build/tests-pyrowave/tst_pyrowavemetal
+
+The GPU test exercises 4:2:0/4:4:4, 8/10-bit textures, both framings, non-block-aligned sizes, decoded pixel quality, malformed-frame recovery, texture pool exhaustion/reuse, cross-thread frame release, render event waits, and frames that outlive their decoder. Live streaming and external VRR testing are separate acceptance checks.

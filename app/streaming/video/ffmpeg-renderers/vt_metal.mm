@@ -2,6 +2,9 @@
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
+#ifdef HAVE_PYROWAVE_METAL
+#include "streaming/video/pyrowave/pyrowavemetal.h"
+#endif
 #include "pacer/displaylink_source.h"
 #undef AVMediaType
 
@@ -374,8 +377,13 @@ public:
         }
     }
 
+    void* getPyroWaveMetalDevice() override { return (void*)m_CommandQueue.device; }
+
     int getBitnessScaleFactor(AVFrame* frame)
     {
+#ifdef HAVE_PYROWAVE_METAL
+        if (pyroWaveMetalFrame(frame)) return 1;
+#endif
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             // VideoToolbox frames never require scaling
             return 1;
@@ -684,6 +692,9 @@ public:
 
     bool testRenderFrame(AVFrame *frame) override
     { @autoreleasepool {
+#ifdef HAVE_PYROWAVE_METAL
+        if (auto ref = pyroWaveMetalFrame(frame)) return pyroWaveMetalWait(ref);
+#endif
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             size_t planes = getFramePlaneCount(frame);
             SDL_assert(planes <= MAX_VIDEO_PLANES);
@@ -714,10 +725,30 @@ public:
 
         m_RenderPassDescriptor.colorAttachments[0].texture = drawable.texture;
         auto commandBuffer = getCommandBuffer();
+#ifdef HAVE_PYROWAVE_METAL
+        auto pyroFrame = pyroWaveMetalFrame(frame);
+        if (pyroFrame) {
+            // FrameCadence can release its reference immediately after submission.
+            // Keep the surface alive until the GPU has finished sampling it.
+            AVFrame* retainedFrame = av_frame_clone(frame);
+            if (!retainedFrame) return;
+            [commandBuffer encodeWaitForEvent:pyroFrame->readyEvent value:pyroFrame->readyValue];
+            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+                AVFrame* releasedFrame = retainedFrame;
+                av_frame_free(&releasedFrame);
+            }];
+        }
+#endif
         auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:m_RenderPassDescriptor];
 
         // Bind textures and buffers then draw the video region
         [renderEncoder setRenderPipelineState:m_VideoPipelineState];
+#ifdef HAVE_PYROWAVE_METAL
+        if (pyroFrame) {
+            for (size_t i = 0; i < planes; ++i) [renderEncoder setFragmentTexture:pyroFrame->textures[i] atIndex:i];
+        }
+        else
+#endif
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             for (size_t i = 0; i < planes; i++) {
                 [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(m_CVMetalTextures[m_CurrentBuffer][i]) atIndex:i];

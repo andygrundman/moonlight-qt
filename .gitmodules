@@ -25,3 +25,6 @@
 [submodule "imgui/implot"]
 	path = imgui/implot
 	url = https://github.com/epezent/implot.git
+[submodule "pyrowave-metal/pyrowave"]
+	path = pyrowave-metal/pyrowave
+	url = https://github.com/Themaister/pyrowave.git

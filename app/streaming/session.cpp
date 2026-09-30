@@ -20,7 +20,7 @@
 #include "video/slvid.h"
 #endif
 
-#ifdef HAVE_PYROWAVE
+#if defined(HAVE_PYROWAVE) && !defined(HAVE_PYROWAVE_METAL)
 #include "video/pyrowave.h"
 #endif
 
@@ -302,7 +302,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                 "V-sync %s",
                 enableVsync ? "enabled" : "disabled");
 
-#ifdef HAVE_PYROWAVE
+#if defined(HAVE_PYROWAVE) && !defined(HAVE_PYROWAVE_METAL)
     if (videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) {
         chosenDecoder = new PyroWaveVideoDecoder(testOnly);
         if (chosenDecoder->initialize(&params)) {
