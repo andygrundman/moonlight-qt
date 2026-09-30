@@ -42,19 +42,19 @@ private:
     AUSpatialMixerOutputType getSpatialMixerOutputType();
     void setOutputDeviceName(CFStringRef);
 
-    AudioUnit m_OutputAU;
+    AudioUnit m_OutputAU = nullptr;
     AUSpatialRenderer m_SpatialAU;
 
     // output device metadata
-    AudioDeviceID m_OutputDeviceID;
+    AudioDeviceID m_OutputDeviceID = 0;
     AudioStreamBasicDescription m_OutputASBD;
-    char *m_OutputDeviceName;
+    char *m_OutputDeviceName = nullptr;
     char m_OutputTransportType[5];
     char m_OutputDataSource[5];
     const OPUS_MULTISTREAM_CONFIGURATION* m_opusConfig;
 
     // buffers
-    TPCircularBuffer m_RingBuffer;
+    TPCircularBuffer m_RingBuffer = {};
     AllocatedAudioBufferList m_SpatialBuffer;
     double m_AudioPacketDuration;
     uint32_t m_BufferFrameSize;
