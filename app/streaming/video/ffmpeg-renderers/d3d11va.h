@@ -27,6 +27,9 @@ public:
     virtual int getDecoderCapabilities() override;
     virtual InitFailureReason getInitFailureReason() override;
 
+    IDXGIOutput* GetDXGIOutput() const { return m_dxgiOutput.Get(); }
+    IDXGISwapChain4* GetSwapChain() const { return m_SwapChain.Get(); }
+
 #ifndef IMGUI_DISABLE
     virtual void ImGui_initBackend() override;
     virtual void ImGui_deinitBackend() override;
@@ -55,7 +58,7 @@ private:
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
     void renderVideo(AVFrame* frame);
     bool checkDecoderSupport(IDXGIAdapter* adapter);
-    bool createDeviceByAdapterIndex(int adapterIndex, bool* adapterNotFound = nullptr);
+    bool createDeviceByAdapterIndex(int adapterIndex, int outputIndex, bool* adapterNotFound = nullptr);
     bool setupSharedDevice(IDXGIAdapter1* adapter);
     bool createSharedFencePair(UINT64 initialValue,
                                ID3D11Device5* dev1, ID3D11Device5* dev2,
@@ -80,6 +83,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11DeviceContext4> m_RenderDeviceContext, m_DecodeDeviceContext;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_RenderSharedTextureArray;
     Microsoft::WRL::ComPtr<IDXGISwapChain4> m_SwapChain;
+    Microsoft::WRL::ComPtr<IDXGIOutput> m_dxgiOutput;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_RenderTargetView;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_VideoBlendState;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_OverlayBlendState;

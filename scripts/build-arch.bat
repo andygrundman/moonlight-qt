@@ -150,8 +150,8 @@ if !ERRORLEVEL! NEQ 0 goto Error
 
 echo Cleaning output directories
 rmdir /s /q %DEPLOY_FOLDER%
-rmdir /s /q %BUILD_FOLDER%
-rmdir /s /q %INSTALLER_FOLDER%
+rem rmdir /s /q %BUILD_FOLDER%
+rem rmdir /s /q %INSTALLER_FOLDER%
 rmdir /s /q %SYMBOLS_FOLDER%
 mkdir %BUILD_ROOT%
 mkdir %DEPLOY_FOLDER%

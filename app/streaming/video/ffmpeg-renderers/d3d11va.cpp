@@ -124,6 +124,7 @@ D3D11VARenderer::~D3D11VARenderer()
     m_RenderR2DFence.Reset();
 
     m_RenderTargetView.Reset();
+    m_dxgiOutput.Reset();
     m_SwapChain.Reset();
 
     m_RenderSharedTextureArray.Reset();
@@ -272,7 +273,7 @@ Exit:
     return success;
 }
 
-bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, bool* adapterNotFound)
+bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, int outputIndex, bool* adapterNotFound)
 {
     const D3D_FEATURE_LEVEL supportedFeatureLevels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
     bool success = false;
@@ -298,6 +299,15 @@ bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, bool* adapter
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "IDXGIFactory::EnumAdapters1() failed: %x",
                      hr);
+        goto Exit;
+    }
+
+    // Save DXGIOutput for WaitForVblank
+    hr = adapter->EnumOutputs(outputIndex, &m_dxgiOutput);
+    if (FAILED(hr)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "IDXGIAdapter::EnumOutputs(%d) failed to get IDXGIOutput: %x",
+                     outputIndex, hr);
         goto Exit;
     }
 
@@ -551,7 +561,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
 
     // First try the adapter corresponding to the display where our window resides.
     // This will let us avoid a copy if the display GPU has the required decoder.
-    if (!createDeviceByAdapterIndex(m_AdapterIndex)) {
+    if (!createDeviceByAdapterIndex(m_AdapterIndex, outputIndex)) {
         // If that didn't work, we'll try all GPUs in order until we find one
         // or run out of GPUs (DXGI_ERROR_NOT_FOUND from EnumAdapters())
         bool adapterNotFound = false;
@@ -561,7 +571,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
                 continue;
             }
 
-            if (createDeviceByAdapterIndex(i, &adapterNotFound)) {
+            if (createDeviceByAdapterIndex(i, outputIndex, &adapterNotFound)) {
                 // This GPU worked! Continue initialization.
                 break;
             }

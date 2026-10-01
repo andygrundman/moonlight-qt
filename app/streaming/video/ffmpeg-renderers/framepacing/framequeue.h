@@ -1,5 +1,8 @@
 #pragma once
 
+#include "streaming/floatbuffer.h"
+#include "framepacer.h"
+
 #include <Limelight.h>
 #include "SDL_compat.h"
 
@@ -33,6 +36,7 @@ class FrameQueue
 
     void clear();
     std::size_t count() const;
+    float countAverage() const;
     bool isEmpty() const;
     void setHighWaterMark(int hwm);
     void start();
@@ -82,6 +86,7 @@ class FrameQueue
     std::vector<Entry> m_Buffer;
     int m_Capacity;
     int m_Count;
+    FloatBuffer m_CountFB;
     int m_Head;
     int m_Tail;
 
@@ -96,7 +101,7 @@ class FrameQueue
 // Frame queue debugging, uncomment FRAME_QUEUE_VERBOSE or FRAME_QUEUE_VERBOSE_LIMITED
 // When FQLog is enabled, the log volume can be intense, so LIMITED only logs data for a short time
 #if !defined(NDEBUG)
-// #define FRAME_QUEUE_VERBOSE
+#define FRAME_QUEUE_VERBOSE
 // #define FRAME_QUEUE_VERBOSE_LIMITED
 #endif
 
@@ -106,14 +111,14 @@ class FrameQueue
                                                                        ##__VA_ARGS__)
 
 #ifdef FRAME_QUEUE_VERBOSE
-#define FQLog(fmt, ...) FQLogForce(fmt, ...)
+#define FQLog(fmt, ...) FQLogForce(fmt, __VA_ARGS__)
 #else
     #ifdef FRAME_QUEUE_VERBOSE_LIMITED
         #include <atomic>
 static std::atomic<int> g_fqlog_counter {0};
         #define FQLog(fmt, ...) \
             if (++g_fqlog_counter > 200 && g_fqlog_counter < 1000) \
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, fmt, ##__VA_ARGS__)
+            FQLogForce(fmt, __VA_ARGS__)
     #else
         #if defined(_MSC_VER)
             #define FQLog(...) __noop

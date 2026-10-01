@@ -1,8 +1,10 @@
 #pragma once
 
 #include "../framepacing/framepacer.h"
+#include "streaming/video/ffmpeg-renderers/d3d11va.h"
 
 #include <SDL_syswm.h>
+#include <atomic>
 
 // from <D3dkmthk.h>
 typedef LONG NTSTATUS;
@@ -31,7 +33,7 @@ typedef NTSTATUS(APIENTRY* PFND3DKMTWAITFORVERTICALBLANKEVENT)(D3DKMT_WAITFORVER
 class DxVsyncSource : public IVsyncSource
 {
 public:
-    DxVsyncSource();
+    DxVsyncSource(IFFmpegRenderer* renderer);
 
     virtual ~DxVsyncSource();
 
@@ -42,6 +44,9 @@ public:
     virtual void waitForVsync() override;
 
 private:
+    void updateFrameStats();
+
+    D3D11VARenderer* m_Renderer;
     HMODULE m_Gdi32Handle;
     HWND m_Window;
     HMONITOR m_LastMonitor;
@@ -50,4 +55,15 @@ private:
     PFND3DKMTOPENADAPTERFROMHDC m_D3DKMTOpenAdapterFromHdc;
     PFND3DKMTCLOSEADAPTER m_D3DKMTCloseAdapter;
     PFND3DKMTWAITFORVERTICALBLANKEVENT m_D3DKMTWaitForVerticalBlankEvent;
+
+    static constexpr int VSYNC_HISTORY_SIZE = 10;
+    std::mutex m_FrameStatsLock;
+    UINT m_LastSyncRefreshCount;
+    int64_t m_LastSyncQpc = 0;
+    int64_t m_VsyncIntervalQpc; // also tracked in framepacer
+    std::array<int64_t, VSYNC_HISTORY_SIZE> m_vhistory{};
+    int m_vhcount = 0;
+    int m_vhidx = 0;
+    int64_t m_vhsum = 0;
+    double m_ewmaVsyncDriftQpc = 1.0;
 };

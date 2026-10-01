@@ -1783,9 +1783,11 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     // Capture a frame timestamp to measuring pacing delay
                     frame->pkt_dts = LiGetMicroseconds();
 
+                    PDECODE_UNIT pdu = nullptr;
                     if (!m_FrameInfoQueue.isEmpty()) {
                         // Data buffers in the DU are not valid here!
                         DECODE_UNIT du = m_FrameInfoQueue.dequeue();
+                        pdu = &du;
 
                         // Count time in avcodec_send_packet() and avcodec_receive_frame()
                         // as time spent decoding. Also count time spent in the decode unit
@@ -1797,7 +1799,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     }
 
                     // Queue the frame for rendering (or render now if pacer is disabled)
-                    FramePacer::instance().submitFrame(frame);
+                    FramePacer::instance().submitFrame(frame, pdu);
                 }
                 else if (err == AVERROR(EAGAIN)) {
                     VIDEO_FRAME_HANDLE handle;

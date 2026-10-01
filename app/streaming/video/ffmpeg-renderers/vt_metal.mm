@@ -815,7 +815,7 @@ public:
         m_RenderPassDescriptor.colorAttachments[0].texture = nil;
     }}
 
-    virtual void presentFrame(AVFrame* frame, uint64_t targetQpc) override
+    virtual void presentFrame(AVFrame* frame, int64_t targetQpc) override
     { @autoreleasepool {
         auto commandBuffer = getCommandBuffer();
         auto drawable = nextDrawable(); // get cached drawable
@@ -865,6 +865,7 @@ public:
             }
 
             // present-to-display latency
+            // TODO: refactor this to be shared so that d3d11 can use it (GetFrameStatistics + GetLastPresent)
             {
                 std::lock_guard<std::mutex> lock(state->pendingFramesMutex);
                 for (auto it = state->pendingFrames.begin(); it != state->pendingFrames.end(); ++it) {
@@ -1695,8 +1696,8 @@ public:
     {
     #ifndef IMGUI_DISABLE
         // we may need to apply changes from DevUI, but only check once per second
-        uint64_t now = QpcNow();
-        static uint64_t lastDevUI = 0;
+        int64_t now = QpcNow();
+        static int64_t lastDevUI = 0;
         if (lastDevUI > 0 && QpcToMs(now - lastDevUI) < 1000.0) {
             return;
         }

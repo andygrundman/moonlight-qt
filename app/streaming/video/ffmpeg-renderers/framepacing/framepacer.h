@@ -34,6 +34,7 @@ extern "C"
 // Additional metadata attached to AVFrame
 typedef struct MLFrameData {
     int64_t prevPts; // previous frame's pts
+    uint64_t receiveTimeUs; // this frame's receive time, for stats use
 } MLFrameData;
 
 class IVsyncSource {
@@ -59,7 +60,7 @@ public:
 class IFramePacer {
 public:
     virtual ~IFramePacer() = default;
-    virtual void submitFrame(AVFrame* frame) = 0;
+    virtual void submitFrame(AVFrame* frame, PDECODE_UNIT du) = 0;
     virtual bool initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS params) = 0;
     virtual void signalVsync() {
         SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Calls to signalVsync() must switch to signalVsyncTS");
@@ -75,7 +76,7 @@ class FramePacer: public IFramePacer
     // Singleton
     static FramePacer& instance();
 
-    virtual void submitFrame(AVFrame* frame) override;
+    virtual void submitFrame(AVFrame* frame, PDECODE_UNIT du) override;
     virtual bool initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS params) override;
     virtual bool renderOnMainThread() override;
     virtual void signalVsyncTS(double timestamp, double deadline) override;
@@ -83,9 +84,9 @@ class FramePacer: public IFramePacer
     void deinit();
     void initPacingMode(int pacingMode);
     void waitForFrame(double timeoutMs);
-    bool waitBeforePresent(uint64_t targetQpc, uint64_t nudgeQpc);
+    bool waitBeforePresent(int64_t targetQpc, int64_t nudgeQpc);
     int64_t getCurrentFramePts();
-    uint64_t getNextVBlankQpc(uint64_t* now);
+    int64_t getNextVBlankQpc(int64_t* now);
     void waitUntilVsync();
 
     void SetPacingMode(int pacingMode)
@@ -96,6 +97,16 @@ class FramePacer: public IFramePacer
     int GetPacingMode()
     {
         return m_FramePacingMode.load();
+    }
+
+    uint64_t GetLastSyncTargetQpc()
+    {
+        return m_LastSyncTargetQpc.load();
+    }
+
+    RefreshRateRational GetRefreshRate()
+    {
+        return m_RefreshRate;
     }
 
     double GetVsyncTimestamp()
@@ -136,9 +147,9 @@ class FramePacer: public IFramePacer
 
     std::mutex m_FrameStatsLock;
     std::condition_variable m_WaitVsync;
-    uint64_t m_LastSyncQpc;
-    std::atomic<uint64_t> m_LastSyncTargetQpc {0};
+    int64_t m_LastSyncQpc;
+    std::atomic<int64_t> m_LastSyncTargetQpc {0};
     std::atomic<double> m_VsyncTimestamp {0};
-    uint64_t m_VsyncIntervalQpc;
+    int64_t m_VsyncIntervalQpc;
     double m_ewmaVsyncDriftQpc;
 };

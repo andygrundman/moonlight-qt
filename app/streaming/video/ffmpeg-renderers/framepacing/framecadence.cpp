@@ -1,4 +1,5 @@
 #include "framecadence.h"
+#include "framepacer.h"
 #include "framequeue.h"
 
 #include <algorithm>

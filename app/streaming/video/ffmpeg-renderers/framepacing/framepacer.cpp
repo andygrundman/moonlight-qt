@@ -132,7 +132,7 @@ bool FramePacer::initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS param
 #ifdef Q_OS_WIN32
             case SDL_SYSWM_WINDOWS:
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Frame pacing: using D3D WaitForVerticalBlankEvent");
-                m_VsyncSource = new DxVsyncSource();
+                m_VsyncSource = new DxVsyncSource(m_Renderer);
                 break;
 #endif
 
@@ -243,7 +243,7 @@ int FramePacer::renderThread(void* context)
     //    renderModeImmediate() || renderModeDisplayLocked()
     // t3: render done
     //    wait
-    uint64_t t0 = 0, t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0;
+    int64_t t0 = 0, t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0;
     int64_t lastFramePts = 0, lastPresentTime = 0;
     double frametimeMs = 0.0, hostFrametimeMs = 0.0;
     const double bufferMs = 1.0;  // safety wait time to avoid missing deadline
@@ -259,7 +259,7 @@ int FramePacer::renderThread(void* context)
 
     while (!me->stopping()) {
         // Get overall deadline we must hit to not overshoot Present
-        uint64_t deadline = me->getNextVBlankQpc(&t0);
+        int64_t deadline = me->getNextVBlankQpc(&t0);
 
         me->m_Renderer->waitToRender();
         t1 = QpcNow();
@@ -279,7 +279,7 @@ int FramePacer::renderThread(void* context)
         t2 = QpcNow();
 
         bool hitDeadline = true;
-        uint64_t presentTargetQpc = deadline;
+        int64_t presentTargetQpc = deadline;
 
         bool didRender = isImmediate ? me->renderModeImmediate() : me->renderModeDisplayLocked();
         t3 = QpcNow();
@@ -470,6 +470,8 @@ bool FramePacer::renderModeImmediate()
           queueDepth,
           droppedCount);
 
+    Stats::instance().TrackFrameArrival(m_CurrentFrame, droppedCount);
+
     // Keep m_CurrentFrame alive until the next frame. It is used to calculate frametime.
     return true;
 }
@@ -482,11 +484,12 @@ bool FramePacer::renderModeDisplayLocked()
 	int advanceCount =  FrameCadence::instance().decideAdvanceCount();
 
 	// if the queue has too many frames in it, break the cadence and render or drop one extra
-	int queueDepth = FrameQueue::instance().count();
+	size_t queueDepth = FrameQueue::instance().count();
 	if (queueDepth > FRAME_QUEUE_LOW) {
 		advanceCount++;
 	}
 
+    int droppedCount = 0;
 	for (int i = 0; i < advanceCount; ++i) {
 		AVFrame *newFrame = FrameQueue::instance().dequeue();
 		if (!newFrame) {
@@ -496,6 +499,7 @@ bool FramePacer::renderModeDisplayLocked()
 		if (m_CurrentFrame) {
 			if (i > 0) {
 				// advanceCount was > 1, so this is a dropped frame
+                droppedCount++;
                 Stats::instance().SubmitDroppedFrame(1);
 				ImGuiPlots::instance().observeFloat(PLOT_DROPPED_PACER, 1.0);
 			}
@@ -527,16 +531,18 @@ bool FramePacer::renderModeDisplayLocked()
         queueDepth
     );
 
+    Stats::instance().TrackFrameArrival(m_CurrentFrame, droppedCount);
+
     // Keep m_CurrentFrame alive in case we need to reuse it on the next present
     return true;
 }
 
 // called by render thread, returns true if we waited, false if we missed the target
-bool FramePacer::waitBeforePresent(uint64_t targetQpc, uint64_t nudgeQpc) {
+bool FramePacer::waitBeforePresent(int64_t targetQpc, int64_t nudgeQpc) {
     if (stopping()) return false;
 
     // wait until vblank before presenting
-	uint64_t now = QpcNow();
+	int64_t now = QpcNow();
 	if (targetQpc == 0) {
 		targetQpc = getNextVBlankQpc(&now);
 	}
@@ -565,7 +571,7 @@ int64_t FramePacer::getCurrentFramePts()
 
 // end main thread
 
-static inline int frameAttachUserdata(AVFrame* frame, int64_t prevPts)
+static inline int frameAttachUserdata(AVFrame* frame, int64_t prevPts, uint64_t receiveTimeUs)
 {
     if (!frame) {
         return AVERROR(EINVAL);
@@ -582,13 +588,14 @@ static inline int frameAttachUserdata(AVFrame* frame, int64_t prevPts)
 
     MLFrameData* data = (MLFrameData*) buf->data;
     data->prevPts = prevPts;
+    data->receiveTimeUs = receiveTimeUs;
     frame->opaque_ref = buf;
 
     return 0;
 }
 
 // called by decoder thread
-void FramePacer::submitFrame(AVFrame* frame)
+void FramePacer::submitFrame(AVFrame* frame, PDECODE_UNIT du)
 {
     if (stopping()) {
         av_frame_free(&frame);
@@ -599,7 +606,7 @@ void FramePacer::submitFrame(AVFrame* frame)
     // which gives us the ability to accurately pace frames on a VRR display.
     if (frame->pts) {
         int64_t prevPts = FrameCadence::instance().observeFramePts(frame->pts);
-        frameAttachUserdata(frame, prevPts);
+        frameAttachUserdata(frame, prevPts, du->receiveTimeUs);
 
         // If this is the first frame we've seen, set our anchor point
         if (m_RemoteAnchorPts == 0) {
@@ -615,12 +622,8 @@ void FramePacer::submitFrame(AVFrame* frame)
 
     // Sometimes a frame will be dequeued right away, causing count() to be 0.
     // Use min of 1.0 for a nicer graph.
-    int count = std::max((int)FrameQueue::instance().count(), 1);
-
-    // plot a smoother queue size average
-    static FloatBuffer avgQueueFB{256};
-    avgQueueFB.push((float)count);
-    float avgQueueDepth = avgQueueFB.average();
+    //int count = std::max((int)FrameQueue::instance().count(), 1);
+    float avgQueueDepth = FrameQueue::instance().countAverage();
 
     ImGuiPlots::instance().observeFloat(PLOT_DROPPED_PACER, (float) dropCount);
     ImGuiPlots::instance().observeFloat(PLOT_QUEUED_FRAMES, avgQueueDepth);
@@ -649,6 +652,8 @@ int FramePacer::vsyncThread(void* context)
 {
     FramePacer* me = reinterpret_cast<FramePacer*>(context);
 
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "vsyncThread started");
+
     if (SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH) < 0) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Unable to set vsync thread to high priority: %s", SDL_GetError());
     }
@@ -662,10 +667,6 @@ int FramePacer::vsyncThread(void* context)
         else {
             // Let the VSync source wait in the context of our thread
             me->m_VsyncSource->waitForVsync();
-        }
-
-        if (me->stopping()) {
-            break;
         }
     }
 
@@ -700,10 +701,10 @@ void FramePacer::signalVsyncTS(double timestamp, double deadline)
 
     // compare with the last sync target we used in waitBeforePresent
     int64_t driftQpc = 0;
-    uint64_t lastTargetQpc = m_LastSyncTargetQpc.load();
+    int64_t lastTargetQpc = m_LastSyncTargetQpc.load();
     if (lastTargetQpc > 0) {
         driftQpc = m_LastSyncQpc - lastTargetQpc;
-        if ((uint64_t)std::llabs(driftQpc) < MsToQpc(0.03)) {
+        if (std::llabs(driftQpc) < MsToQpc(0.03)) {
             const double alpha = 0.05; // slow moving average
             m_ewmaVsyncDriftQpc = (1.0 - alpha) * m_ewmaVsyncDriftQpc + alpha * static_cast<double>(driftQpc);
         }
@@ -724,7 +725,7 @@ void FramePacer::signalVsyncTS(double timestamp, double deadline)
 void FramePacer::waitUntilVsync()
 {
     std::unique_lock<std::mutex> lock(m_FrameStatsLock);
-    uint64_t lastSyncQpc = m_LastSyncQpc;
+    int64_t lastSyncQpc = m_LastSyncQpc;
     m_WaitVsync.wait(lock, [&]() {
         return m_LastSyncQpc > lastSyncQpc || stopping();
     });
@@ -732,10 +733,10 @@ void FramePacer::waitUntilVsync()
 
 // Caller often needs now and the vsync interval, since this needs locking
 // the logic is confined to this function.
-uint64_t FramePacer::getNextVBlankQpc(uint64_t* now)
+int64_t FramePacer::getNextVBlankQpc(int64_t* now)
 {
     std::scoped_lock<std::mutex> lock(m_FrameStatsLock);
-    uint64_t target = 0, interval = 0;
+    int64_t target = 0, interval = 0;
     *now = QpcNow();
 
     if (m_LastSyncQpc == 0 || m_VsyncIntervalQpc == 0) {
@@ -746,7 +747,7 @@ uint64_t FramePacer::getNextVBlankQpc(uint64_t* now)
     }
     else {
         interval = m_VsyncIntervalQpc;
-        uint64_t next = m_LastSyncQpc + static_cast<int64_t>(m_ewmaVsyncDriftQpc);
+        int64_t next = m_LastSyncQpc + static_cast<int64_t>(m_ewmaVsyncDriftQpc);
 
         while (next < *now) {
             next += interval;

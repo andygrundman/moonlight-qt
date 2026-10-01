@@ -21,6 +21,7 @@ FrameQueue& FrameQueue::instance()
 FrameQueue::FrameQueue():
     m_Capacity(5),
     m_Count(0),
+    m_CountFB{64},
     m_Head(0),
     m_Tail(0),
     m_DroppedLast(false),
@@ -64,6 +65,12 @@ std::size_t FrameQueue::count() const
 {
     std::lock_guard<std::mutex> lock(m_Mutex);
     return static_cast<std::size_t>(m_Count);
+}
+
+float FrameQueue::countAverage() const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    return m_CountFB.average();
 }
 
 bool FrameQueue::isEmpty() const
@@ -119,6 +126,7 @@ void FrameQueue::pushEntry(const Entry& entry)
     m_Buffer[m_Tail] = entry;
     m_Tail = (m_Tail + 1) % m_Capacity;
     ++m_Count;
+    m_CountFB.push((float)m_Count);
 
     m_Cv.notify_one();
 
@@ -139,6 +147,7 @@ FrameQueue::Entry FrameQueue::popEntry()
     m_Buffer[m_Head] = {};
     m_Head = (m_Head + 1) % m_Capacity;
     --m_Count;
+    m_CountFB.push((float)m_Count);
     return entry;
 }
 

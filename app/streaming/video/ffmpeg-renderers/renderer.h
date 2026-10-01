@@ -193,7 +193,7 @@ public:
         // Don't wait by default
     }
 
-    virtual void presentFrame(AVFrame*, uint64_t) {
+    virtual void presentFrame(AVFrame*, int64_t) {
         // Nothing
     }
 
