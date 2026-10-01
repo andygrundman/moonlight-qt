@@ -11,7 +11,6 @@
 extern "C"
 {
 #include "Limelight.h"
-#include <libavcodec/avcodec.h>
 }
 
 typedef struct _VIDEO_STATS {
@@ -43,24 +42,6 @@ typedef struct _VIDEO_STATS {
     uint64_t measurementStartUs;
 } VIDEO_STATS, *PVIDEO_STATS;
 
-// Pre-decode frame arrival tracking, one window per second of receive time.
-// All times come from DECODE_UNIT receiveTimeUs (first packet of each frame),
-// so this measures the true network input rate before reassembly and decode.
-typedef struct _ARRIVAL_STATS {
-    uint64_t windowStartUs;  // receiveTimeUs at window start
-    uint64_t firstRxUs;  // receiveTimeUs of first frame in window
-    uint64_t lastRxUs;  // receiveTimeUs of most recent frame
-    uint32_t firstRtpTs;  // rtpTimestamp (90kHz) of first frame in window
-    uint32_t lastRtpTs;  // rtpTimestamp of most recent frame
-    uint32_t frames;  // frames received this window
-    uint32_t drops;  // frames lost on the network this window
-    uint32_t bursts;  // frames that arrived at < half their rtp spacing
-    uint32_t stalls;  // frames that arrived at > 2x rtp spacing
-    double jitterSumMs;  // sum of |arrival delta - rtp delta|
-    double deltaMaxMs;  // largest arrival delta this window
-    int queueAtWindowStart;  // FrameQueue depth when the window began
-} ARRIVAL_STATS;
-
 class Stats
 {
   public:
@@ -83,7 +64,6 @@ class Stats
     void SubmitPacerTime(uint64_t pacerTimeUs);
     void SubmitPresentTimeUs(uint64_t presentTimeUs, int presentMode);
     void SubmitRenderStats(double preWaitTimeMs, double renderTimeMs, bool hitDeadline);
-    void TrackFrameArrival(AVFrame *frame, int droppedFramesPacer);
 
   private:
 	Stats();
@@ -99,7 +79,6 @@ class Stats
     VIDEO_STATS m_ActiveWndVideoStats;
     VIDEO_STATS m_LastWndVideoStats;
     VIDEO_STATS m_GlobalVideoStats;
-    ARRIVAL_STATS m_ArrivalStats;
     BandwidthTracker m_bwTracker;
     float m_avgQueueSize;
     double m_avgMbpsSmoothed;

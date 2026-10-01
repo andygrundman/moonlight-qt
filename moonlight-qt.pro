@@ -1,4 +1,6 @@
 TEMPLATE = subdirs
+include(pyrowave/build-config.pri)
+
 SUBDIRS = \
     moonlight-common-c \
     qmdnsengine \
@@ -8,6 +10,10 @@ SUBDIRS = \
 
 # Build the dependencies in parallel before the final app
 app.depends = qmdnsengine moonlight-common-c h264bitstream imgui
+macx:pyrowave-metal {
+    SUBDIRS += pyrowave
+    app.depends += pyrowave
+}
 win32:!winrt {
     SUBDIRS += AntiHooking
     app.depends += AntiHooking

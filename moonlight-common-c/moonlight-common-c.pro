@@ -74,7 +74,8 @@ SOURCES += \
     $$COMMON_C_DIR/src/VideoDepacketizer.c \
     $$COMMON_C_DIR/src/VideoStream.c
 HEADERS += \
-    $$COMMON_C_DIR/src/Limelight.h
+    $$COMMON_C_DIR/src/Limelight.h \
+    $$COMMON_C_DIR/src/PyroWaveProtocol.h
 INCLUDEPATH += \
     $$ENET_DIR/include \
     $$COMMON_C_DIR/src \

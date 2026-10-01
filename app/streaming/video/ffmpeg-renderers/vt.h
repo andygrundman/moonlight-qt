@@ -31,6 +31,10 @@ class VTMetalRendererFactory {
 public:
     static
     IFFmpegRenderer* createRenderer(bool hwAccel);
+#ifdef HAVE_PYROWAVE
+    static IFFmpegRenderer* createTextureRenderer();
+    static void* getDevice(IFFmpegRenderer* renderer);
+#endif
 };
 
 class VTRendererFactory {

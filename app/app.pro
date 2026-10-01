@@ -452,6 +452,9 @@ macx {
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
         streaming/video/ffmpeg-renderers/vt_metal.mm
+    SOURCES += streaming/video/metalframe.mm
+    HEADERS += streaming/video/metalframe.h
+    HEADERS += streaming/video/ffmpeg-renderers/vt_metal_types.h
 
     HEADERS += \
         streaming/audio/renderers/coreaudio/au_spatial_renderer.h \
@@ -564,6 +567,24 @@ else:unix: LIBS += -L$$OUT_PWD/../imgui/ -limgui
 
 INCLUDEPATH += $$PWD/../imgui/imgui $$PWD/../imgui/imgui/backends $$PWD/../imgui/implot
 DEPENDPATH += $$PWD/../imgui/imgui
+
+include(../pyrowave/build-config.pri)
+macx:pyrowave-metal {
+    SOURCES += streaming/video/pyrowave.mm
+    SOURCES += streaming/video/pyrowaveframing.cpp
+    HEADERS += streaming/video/pyrowaveframing.h
+    HEADERS += streaming/video/pyrowave.h streaming/video/pyrowavebitstream.h
+    HEADERS += streaming/video/pyrowavecolor.h
+    # Keep PyroWave out of the x86_64 slice of universal builds.
+    LIBS += -Xarch_arm64 -Wl,$$OUT_PWD/../pyrowave/libpyrowave-metal.a
+    PRE_TARGETDEPS += $$OUT_PWD/../pyrowave/libpyrowave-metal.a
+
+    QMAKE_CFLAGS += -Xarch_arm64 -DHAVE_PYROWAVE
+    QMAKE_CXXFLAGS += -Xarch_arm64 -DHAVE_PYROWAVE
+
+    INCLUDEPATH += $$PWD/../pyrowave/pyrowave/metal
+    DEPENDPATH += $$PWD/../pyrowave/pyrowave/metal
+}
 
 !winrt {
     win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../AntiHooking/release/ -lAntiHooking

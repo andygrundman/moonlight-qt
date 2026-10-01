@@ -16,6 +16,10 @@
 #include "video/ffmpeg.h"
 #endif
 
+#ifdef HAVE_PYROWAVE
+#include "video/pyrowave.h"
+#endif
+
 #ifdef HAVE_SLVIDEO
 #include "video/slvid.h"
 #endif
@@ -299,6 +303,21 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "V-sync %s",
                 enableVsync ? "enabled" : "disabled");
+
+    // PyroWave has no FFmpeg decoder, and must never reach codec-ID fallback.
+    if (videoFormat & VIDEO_FORMAT_MASK_PYROWAVE) {
+        chosenDecoder = nullptr;
+#ifdef HAVE_PYROWAVE
+        chosenDecoder = new PyroWaveVideoDecoder(testOnly);
+        if (chosenDecoder->initialize(&params)) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PyroWave Metal decoder chosen");
+            return true;
+        }
+        delete chosenDecoder;
+        chosenDecoder = nullptr;
+#endif
+        return false;
+    }
 
 #ifdef HAVE_SLVIDEO
     chosenDecoder = new SLVideoDecoder(testOnly);
@@ -891,6 +910,14 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // straight to H.264 if the user asked for AV1 and the host doesn't support it.
         m_SupportedVideoFormats.removeByMask(~(VIDEO_FORMAT_MASK_AV1 | VIDEO_FORMAT_MASK_H265));
         break;
+    case StreamingPreferences::VCC_FORCE_PYROWAVE:
+        // PyroWave is opt-in; bit depth and chroma preferences are applied below.
+        m_SupportedVideoFormats.clear();
+        m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE10_444);
+        m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE10_420);
+        m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE_444);
+        m_SupportedVideoFormats.append(VIDEO_FORMAT_PYROWAVE);
+        break;
     }
 
     // NB: Since deprioritization puts codecs in reverse order (at the bottom of the list),
@@ -1004,6 +1031,42 @@ bool Session::validateLaunch(SDL_Window* testWindow)
         return false;
     }
 
+    if (m_Preferences->videoCodecConfig == StreamingPreferences::VCC_FORCE_PYROWAVE) {
+#ifndef HAVE_PYROWAVE
+        emit displayLaunchError(tr("PyroWave decoding requires an Apple Silicon build of Moonlight."));
+        return false;
+#else
+        if (m_Preferences->videoDecoderSelection == StreamingPreferences::VDS_FORCE_SOFTWARE) {
+            emit displayLaunchError(tr("PyroWave requires GPU decoding. Select automatic or hardware decoding."));
+            return false;
+        }
+        // RTSP requires the base capability even for a 4:4:4 profile.
+        if (!(m_Computer->serverCodecModeSupport & SCM_PYROWAVE)) {
+            emit displayLaunchError(tr("Your host does not support PyroWave streaming."));
+            return false;
+        }
+        m_SupportedVideoFormats.removeByMask(~m_SupportedVideoFormats.maskByServerCodecModes(m_Computer->serverCodecModeSupport));
+        if (m_SupportedVideoFormats.isEmpty()) {
+            emit displayLaunchError(tr("Your host does not support the selected PyroWave format."));
+            return false;
+        }
+        for (int i = 0; i < m_SupportedVideoFormats.size();) {
+            if (getDecoderAvailability(testWindow, m_Preferences->videoDecoderSelection,
+                                       m_SupportedVideoFormats[i], m_StreamConfig.width,
+                                       m_StreamConfig.height, m_StreamConfig.fps) != DecoderAvailability::Hardware) {
+                m_SupportedVideoFormats.removeAt(i);
+            }
+            else {
+                i++;
+            }
+        }
+        if (m_SupportedVideoFormats.isEmpty()) {
+            emit displayLaunchError(tr("Unable to initialize the PyroWave Metal decoder. Use the Metal renderer and a supported Apple Silicon GPU and resolution."));
+            return false;
+        }
+#endif
+    }
+
     if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame) {
         emitLaunchWarning(tr("Your selection to enable remote desktop mouse mode may cause problems in games."));
     }
@@ -1106,7 +1169,7 @@ bool Session::validateLaunch(SDL_Window* testWindow)
             m_SupportedVideoFormats.removeByMask(VIDEO_FORMAT_MASK_10BIT);
         }
         else if (!(m_SupportedVideoFormats & VIDEO_FORMAT_MASK_10BIT)) {
-            emitLaunchWarning(tr("This PC's GPU doesn't support 10-bit HEVC or AV1 decoding for HDR streaming."));
+            emitLaunchWarning(tr("This PC's GPU doesn't support 10-bit decoding for HDR streaming."));
         }
         // Check that the server GPU supports HDR
         else if (m_SupportedVideoFormats.maskByServerCodecModes(m_Computer->serverCodecModeSupport & SCM_MASK_10BIT) == 0) {
@@ -1200,7 +1263,7 @@ bool Session::validateLaunch(SDL_Window* testWindow)
         }
     }
 
-    if (m_StreamConfig.width >= 3840) {
+    if (m_StreamConfig.width >= 3840 && !(m_SupportedVideoFormats & VIDEO_FORMAT_MASK_PYROWAVE)) {
         // Only allow 4K on GFE 3.x+
         if (m_Computer->gfeVersion.isEmpty() || m_Computer->gfeVersion.startsWith("2.")) {
             emitLaunchWarning(tr("GeForce Experience 3.0 or higher is required for 4K streaming."));
@@ -1234,6 +1297,10 @@ bool Session::validateLaunch(SDL_Window* testWindow)
 
     // If we removed all codecs with the checks above, use H.264 as the codec of last resort.
     if (m_SupportedVideoFormats.empty()) {
+        if (m_Preferences->videoCodecConfig == StreamingPreferences::VCC_FORCE_PYROWAVE) {
+            emit displayLaunchError(tr("No compatible PyroWave profile is available for your streaming settings."));
+            return false;
+        }
         m_SupportedVideoFormats.append(VIDEO_FORMAT_H264);
     }
 

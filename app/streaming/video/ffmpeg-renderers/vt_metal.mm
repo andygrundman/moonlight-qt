@@ -2,6 +2,8 @@
 // libavutil both defining AVMediaType
 #define AVMediaType AVMediaType_FFmpeg
 #include "vt.h"
+#include "../metalframe.h"
+#include "vt_metal_types.h"
 #include "pacer/displaylink_source.h"
 #undef AVMediaType
 
@@ -35,25 +37,6 @@
 extern "C" {
     #include <libavutil/pixdesc.h>
 }
-
-struct CscParams
-{
-    simd_half3x3 matrix;
-    simd_half3 offsets;
-};
-
-struct ParamBuffer
-{
-    CscParams cscParams;
-    simd_half2 chromaOffset;
-    simd_half1 bitnessScaleFactor;
-};
-
-struct Vertex
-{
-    simd_float4 position;
-    simd_float2 texCoord;
-};
 
 // tracks in-flight frames and present-to-display latency
 // Note that these are in seconds
@@ -109,9 +92,11 @@ class VTMetalRenderer;
 class VTMetalRenderer : public VTBaseRenderer
 {
 public:
-    VTMetalRenderer(bool hwAccel)
-        : VTBaseRenderer(RendererType::VTMetal),
-          m_HwAccel(hwAccel),
+    enum class FrameSource { VideoToolbox, Software, MetalTextures };
+
+    VTMetalRenderer(FrameSource source)
+        : VTBaseRenderer(source == FrameSource::MetalTextures ? RendererType::MetalTextures : RendererType::VTMetal),
+          m_FrameSource(source),
           m_Window(nullptr),
           m_HwContext(nullptr),
           m_MetalLayer(nullptr),
@@ -187,6 +172,7 @@ public:
 
         if (m_Observer != nil) {
             [m_Observer stop];
+            [m_Observer release];
             m_Observer = nil;
         }
 
@@ -374,27 +360,6 @@ public:
         }
     }
 
-    int getBitnessScaleFactor(AVFrame* frame)
-    {
-        if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-            // VideoToolbox frames never require scaling
-            return 1;
-        }
-        else {
-            const AVPixFmtDescriptor* formatDesc = av_pix_fmt_desc_get((AVPixelFormat)frame->format);
-            if (!formatDesc) {
-                // This shouldn't be possible but handle it anyway
-                SDL_assert(formatDesc);
-                return 1;
-            }
-
-            // This assumes plane 0 is exclusively the Y component
-            SDL_assert(formatDesc->comp[0].step == 1 || formatDesc->comp[0].step == 2);
-            int shift = (formatDesc->comp[0].step * 8) - formatDesc->comp[0].depth;
-            return 1 << shift;
-        }
-    }
-
     bool updateColorSpaceForFrame(AVFrame* frame)
     {
         if (!hasFrameFormatChanged(frame) && !m_HdrMetadataChanged) {
@@ -426,6 +391,11 @@ public:
             newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
             newPixelFormat = MTLPixelFormatBGRA8Unorm;
             break;
+        }
+
+        // Keep native 10-bit SDR output at 10-bit precision, including Rec.601.
+        if (m_FrameSource == FrameSource::MetalTextures && getFrameBitsPerChannel(frame) == 10) {
+            newPixelFormat = MTLPixelFormatBGR10A2Unorm;
         }
 
         std::array<float, 9> cscMatrix;
@@ -490,18 +460,19 @@ public:
 
         // Set the new colorspace and pixelFormat, must be done on main thread
         // or we risk a "Deleted thread with uncommitted CATransaction" error when the render thread exits
+        bool pixelFormatChanged = m_MetalLayer.pixelFormat != newPixelFormat;
         dispatch_sync(dispatch_get_main_queue(), ^{
             m_MetalLayer.pixelFormat = newPixelFormat;
             m_MetalLayer.colorspace = newColorSpace;
         });
 
         // Get a new drawable if the pixel format was changed
-        if (m_NeedNewDrawable) {
+        if (pixelFormatChanged || m_NeedNewDrawable) {
             nextDrawable(true); // force a new drawable
             m_NeedNewDrawable = false;
         }
 
-        paramBuffer.bitnessScaleFactor = getBitnessScaleFactor(frame);
+        paramBuffer.bitnessScaleFactor = getMetalTextureSampleScale(frame);
 
         // The CAMetalLayer retains the CGColorSpace
         CGColorSpaceRelease(newColorSpace);
@@ -518,6 +489,16 @@ public:
 
         int planes = getFramePlaneCount(frame);
         SDL_assert(planes == 2 || planes == 3);
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Metal color pipeline: source=%s, %d-bit %d-plane, range=%s, colorspace=%d, transfer=%d, sampleScale=%.0f, EDR=%d, referenceWhite=%.2f, headroom=%.2f, maxNits=%.2f",
+                    m_FrameSource == FrameSource::MetalTextures ? "PyroWave" :
+                        frame->format == AV_PIX_FMT_VIDEOTOOLBOX ? "VideoToolbox" : "software",
+                    getFrameBitsPerChannel(frame), planes,
+                    isFrameFullRange(frame) ? "full" : "limited", colorspace, frame->color_trc,
+                    double(paramBuffer.bitnessScaleFactor),
+                    newPixelFormat == MTLPixelFormatRGBA16Float,
+                    m_ReferenceWhite, m_CurrentEDR.load(), m_MaxNits);
 
         NSError* error = nil;
         MTLRenderPipelineDescriptor *pipelineDesc = [[MTLRenderPipelineDescriptor new] autorelease];
@@ -684,6 +665,25 @@ public:
 
     bool testRenderFrame(AVFrame *frame) override
     { @autoreleasepool {
+        if (m_FrameSource == FrameSource::MetalTextures) {
+            auto textures = getMetalVideoFrame(frame);
+            bool tenBit = frame->format == AV_PIX_FMT_YUV420P10LE || frame->format == AV_PIX_FMT_YUV444P10LE;
+            bool yuv444 = frame->format == AV_PIX_FMT_YUV444P || frame->format == AV_PIX_FMT_YUV444P10LE;
+            if (!textures || (!tenBit && frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUV444P)) {
+                return false;
+            }
+            for (int i = 0; i < 3; i++) {
+                int divisor = i && !yuv444 ? 2 : 1;
+                auto texture = textures->planes[i];
+                if (!texture || texture.device != m_CommandQueue.device ||
+                        texture.pixelFormat != (tenBit ? MTLPixelFormatR16Unorm : MTLPixelFormatR8Unorm) ||
+                        texture.width != NSUInteger(frame->width / divisor) ||
+                        texture.height != NSUInteger(frame->height / divisor)) {
+                    return false;
+                }
+            }
+            return true;
+        }
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             size_t planes = getFramePlaneCount(frame);
             SDL_assert(planes <= MAX_VIDEO_PLANES);
@@ -715,10 +715,29 @@ public:
         m_RenderPassDescriptor.colorAttachments[0].texture = drawable.texture;
         auto commandBuffer = getCommandBuffer();
         auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:m_RenderPassDescriptor];
+        if (!renderEncoder) {
+            m_RenderPassDescriptor.colorAttachments[0].texture = nil;
+            return;
+        }
 
         // Bind textures and buffers then draw the video region
         [renderEncoder setRenderPipelineState:m_VideoPipelineState];
-        if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        if (auto textures = getMetalVideoFrame(frame)) {
+            // Keep the pool slot occupied until GPU sampling completes. The shared
+            // owner also frees the reference if an uncommitted buffer is discarded.
+            __block auto owner = std::shared_ptr<AVBufferRef>(av_buffer_ref(frame->buf[0]),
+                [](AVBufferRef* buffer) { av_buffer_unref(&buffer); });
+            if (!owner) {
+                [renderEncoder endEncoding];
+                m_RenderPassDescriptor.colorAttachments[0].texture = nil;
+                return;
+            }
+            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) { owner.reset(); }];
+            for (size_t i = 0; i < planes; i++) {
+                [renderEncoder setFragmentTexture:textures->planes[i] atIndex:i];
+            }
+        }
+        else if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             for (size_t i = 0; i < planes; i++) {
                 [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(m_CVMetalTextures[m_CurrentBuffer][i]) atIndex:i];
             }
@@ -817,6 +836,10 @@ public:
 
     virtual void presentFrame(AVFrame* frame, int64_t targetQpc) override
     { @autoreleasepool {
+        // Hidden windows and failed renders may not have encoded a frame.
+        if (!frame || !m_CommandBuffer[m_CurrentBuffer] || !m_Drawable) {
+            return;
+        }
         auto commandBuffer = getCommandBuffer();
         auto drawable = nextDrawable(); // get cached drawable
 
@@ -1075,6 +1098,7 @@ public:
                 }
             };
             if (state->stopping.load()) {
+                [drawable present];
                 onExit();
                 return;
             }
@@ -1133,7 +1157,9 @@ public:
         m_CommandBuffer[m_CurrentBuffer] = nil;
 
         // we have some time here to flush the cache, this should keep our memory usage low
-        CVMetalTextureCacheFlush(m_TextureCache, 0);
+        if (m_TextureCache) {
+            CVMetalTextureCacheFlush(m_TextureCache, 0);
+        }
 
         // also check for updated DevUI settings
         applyDevUIConfig();
@@ -1159,6 +1185,11 @@ public:
         }
 
         m_CurrentBuffer = (m_CurrentBuffer + 1) % m_MaxFramesInFlight.load();
+
+        if (m_FrameSource == FrameSource::MetalTextures && !testRenderFrame(frame)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Invalid native Metal video frame");
+            return;
+        }
 
         // Handle changes to the frame's colorspace from last time we rendered
         if (!updateColorSpaceForFrame(frame)) {
@@ -1235,38 +1266,40 @@ public:
                     "Selected Metal device: %s",
                     device.name.UTF8String);
 
-        if (m_HwAccel && !checkDecoderCapabilities(device, params)) {
+        if ((m_FrameSource == FrameSource::VideoToolbox) && !checkDecoderCapabilities(device, params)) {
             return false;
         }
 
-        err = av_hwdevice_ctx_create(&m_HwContext,
-                                     AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                                     nullptr,
-                                     nullptr,
-                                     0);
-        if (err < 0) {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "av_hwdevice_ctx_create() failed for VT decoder: %d",
-                        err);
-            m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
-            return false;
-        }
+        if (m_FrameSource != FrameSource::MetalTextures) {
+            err = av_hwdevice_ctx_create(&m_HwContext,
+                                         AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                         nullptr,
+                                         nullptr,
+                                         0);
+            if (err < 0) {
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "av_hwdevice_ctx_create() failed for VT decoder: %d",
+                            err);
+                m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+                return false;
+            }
 
-        // Create the Metal texture cache for our CVPixelBuffers
-        CFStringRef keys[] = { kCVMetalTextureUsage };
-        NSUInteger usage = MTLTextureUsageShaderRead;
-        CFNumberRef usageNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberNSIntegerType, &usage);
-        const void* values[] = { usageNumber };
-        auto cacheAttributes = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, values, 1, nullptr, nullptr);
-        err = CVMetalTextureCacheCreate(kCFAllocatorDefault, cacheAttributes, device, nullptr, &m_TextureCache);
-        CFRelease(cacheAttributes);
-        CFRelease(usageNumber);
+            // Create the Metal texture cache for our CVPixelBuffers
+            CFStringRef keys[] = { kCVMetalTextureUsage };
+            NSUInteger usage = MTLTextureUsageShaderRead;
+            CFNumberRef usageNumber = CFNumberCreate(kCFAllocatorDefault, kCFNumberNSIntegerType, &usage);
+            const void* values[] = { usageNumber };
+            auto cacheAttributes = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, values, 1, nullptr, nullptr);
+            err = CVMetalTextureCacheCreate(kCFAllocatorDefault, cacheAttributes, device, nullptr, &m_TextureCache);
+            CFRelease(cacheAttributes);
+            CFRelease(usageNumber);
 
-        if (err != kCVReturnSuccess) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "CVMetalTextureCacheCreate() failed: %d",
-                         err);
-            return false;
+            if (err != kCVReturnSuccess) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "CVMetalTextureCacheCreate() failed: %d",
+                             err);
+                return false;
+            }
         }
 
         // Compile our shaders
@@ -1281,6 +1314,9 @@ public:
 
         // Create a command queue for submission
         m_CommandQueue = [device newCommandQueue];
+        if (!m_CommandQueue) {
+            return false;
+        }
 
         // we'll reuse one renderPassDescriptor by changing its texture
         m_RenderPassDescriptor = [[MTLRenderPassDescriptor alloc] init];
@@ -1397,15 +1433,17 @@ public:
         m_VsyncDeadline.store(deadline);
     }
 
+    void* nativeDevice() { return m_CommandQueue.device; }
+
     virtual bool prepareDecoderContext(AVCodecContext* context, AVDictionary**) override
     {
-        if (m_HwAccel) {
+        if (m_FrameSource == FrameSource::VideoToolbox) {
             context->hw_device_ctx = av_buffer_ref(m_HwContext);
         }
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Using Metal renderer with %s decoding",
-                    m_HwAccel ? "hardware" : "software");
+                    (m_FrameSource == FrameSource::VideoToolbox) ? "hardware" : "software");
 
         return true;
     }
@@ -1418,6 +1456,9 @@ public:
 
     int getDecoderCapabilities() override
     {
+        if (m_FrameSource == FrameSource::MetalTextures) {
+            return 0;
+        }
         return CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC |
                CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
     }
@@ -1429,7 +1470,13 @@ public:
 
     bool isPixelFormatSupported(int videoFormat, AVPixelFormat pixelFormat) override
     {
-        if (m_HwAccel) {
+        if (m_FrameSource == FrameSource::MetalTextures) {
+            return (videoFormat == VIDEO_FORMAT_PYROWAVE && pixelFormat == AV_PIX_FMT_YUV420P) ||
+                   (videoFormat == VIDEO_FORMAT_PYROWAVE_444 && pixelFormat == AV_PIX_FMT_YUV444P) ||
+                   (videoFormat == VIDEO_FORMAT_PYROWAVE10_420 && pixelFormat == AV_PIX_FMT_YUV420P10LE) ||
+                   (videoFormat == VIDEO_FORMAT_PYROWAVE10_444 && pixelFormat == AV_PIX_FMT_YUV444P10LE);
+        }
+        if (m_FrameSource == FrameSource::VideoToolbox) {
             return pixelFormat == AV_PIX_FMT_VIDEOTOOLBOX;
         }
         else {
@@ -1486,6 +1533,7 @@ public:
             // visible, and it's better to pause in that situation.
             if (m_Observer != nil) {
                 [m_Observer stop];
+                [m_Observer release];
                 m_Observer = nil;
             }
             m_Observer = [[VTMetalObserver alloc] initWithRenderer:this forWindow:nswindow];
@@ -1796,7 +1844,7 @@ public:
     }
 
 private:
-    bool m_HwAccel;
+    FrameSource m_FrameSource;
     SDL_Window* m_Window;
     AVBufferRef* m_HwContext;
     CAMetalLayer* m_MetalLayer;
@@ -1848,8 +1896,20 @@ private:
 };
 
 IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
-    return new VTMetalRenderer(hwAccel);
+    return new VTMetalRenderer(hwAccel ? VTMetalRenderer::FrameSource::VideoToolbox : VTMetalRenderer::FrameSource::Software);
 }
+
+#ifdef HAVE_PYROWAVE
+IFFmpegRenderer* VTMetalRendererFactory::createTextureRenderer()
+{
+    return new VTMetalRenderer(VTMetalRenderer::FrameSource::MetalTextures);
+}
+
+void* VTMetalRendererFactory::getDevice(IFFmpegRenderer* renderer)
+{
+    return static_cast<VTMetalRenderer*>(renderer)->nativeDevice();
+}
+#endif
 
 @implementation VTMetalObserver {
     VTMetalRenderer* _renderer;
@@ -1894,6 +1954,9 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     if (_note) {
         [[NSNotificationCenter defaultCenter] removeObserver:_note];
         _note = nil;
+    }
+    if (_note2) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_note2];
         _note2 = nil;
     }
 }

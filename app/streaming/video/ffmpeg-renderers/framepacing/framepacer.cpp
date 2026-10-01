@@ -86,6 +86,9 @@ bool FramePacer::initialize(IFFmpegRenderer* renderer, PDECODER_PARAMETERS param
     SDL_Window* window = params->window;
     m_RefreshRate = StreamUtils::getDisplayRefreshRateRational(window);
     m_StreamFps = params->frameRate;
+    m_RemoteAnchorPts = 0;
+    m_LocalAnchorUs = 0;
+    m_CurrentFramePts.store(0);
     m_RendererAttributes = m_Renderer->getRendererAttributes();
     m_Stopping.store(false);
 
@@ -470,8 +473,6 @@ bool FramePacer::renderModeImmediate()
           queueDepth,
           droppedCount);
 
-    Stats::instance().TrackFrameArrival(m_CurrentFrame, droppedCount);
-
     // Keep m_CurrentFrame alive until the next frame. It is used to calculate frametime.
     return true;
 }
@@ -530,8 +531,6 @@ bool FramePacer::renderModeDisplayLocked()
         advanceCount,
         queueDepth
     );
-
-    Stats::instance().TrackFrameArrival(m_CurrentFrame, droppedCount);
 
     // Keep m_CurrentFrame alive in case we need to reuse it on the next present
     return true;

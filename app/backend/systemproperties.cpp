@@ -47,6 +47,11 @@ private:
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);
+#ifdef HAVE_PYROWAVE
+    hasPyroWave = true;
+#else
+    hasPyroWave = false;
+#endif
     hasDesktopEnvironment = WMUtils::isRunningDesktopEnvironment();
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";

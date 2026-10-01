@@ -153,6 +153,7 @@ public:
         VDPAU,
         VTSampleLayer,
         VTMetal,
+        MetalTextures,
     };
 
     IFFmpegRenderer(RendererType type) : m_Type(type) {}
@@ -355,6 +356,8 @@ public:
             return "VideoToolbox (AVSampleBufferDisplayLayer)";
         case RendererType::VTMetal:
             return "VideoToolbox (Metal)";
+        case RendererType::MetalTextures:
+            return "Metal (native textures)";
         }
     }
 

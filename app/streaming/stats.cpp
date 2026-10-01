@@ -1,7 +1,6 @@
 #include "stats.h"
 
 #include "streaming/video/ffmpeg-renderers/framepacing/framepacer.h"
-#include "streaming/video/ffmpeg-renderers/framepacing/framequeue.h"
 #include "imgui.h"
 #include "imgui/devui.h"
 #include "imgui/imgui_plots.h"
@@ -36,7 +35,6 @@ Stats::Stats():
     SDL_zero(m_ActiveWndVideoStats);
     SDL_zero(m_LastWndVideoStats);
     SDL_zero(m_GlobalVideoStats);
-    SDL_zero(m_ArrivalStats);
 
     m_ActiveWndVideoStats.measurementStartUs = LiGetMicroseconds();
 }
@@ -171,137 +169,6 @@ void Stats::SubmitVideoBytesAndReassemblyTime(PDECODE_UNIT decodeUnit, uint32_t 
 #endif
 }
 
-// TODO: figure this out: add drops from pacing, compare with Xbox, try 119.88
-/*
-00:01:01 - SDL Info (0): FQrx 16.00 host 15.99 jit 2.3 max 65.7 burst 0 | q 0>0 avg 1.0 lost 0
-00:01:06 - SDL Info (0): FQrx 29.60 host 29.25 jit 2.8 max 66.0 burst 6 | q 0>2 avg 1.0 lost 0
-00:01:11 - SDL Info (0): FQrx 62.06 host 62.06 jit 6.1 max 66.9 burst 22 | q 2>0 avg 1.1 lost 0
-00:01:16 - SDL Info (0): FQrx 50.12 host 50.11 jit 6.2 max 66.2 burst 16 | q 0>0 avg 1.1 lost 0
-00:01:21 - SDL Info (0): FQrx 114.45 host 114.46 jit 1.4 max 58.5 burst 33 | q 0>1 avg 1.9 lost 0
-00:01:26 - SDL Info (0): FQrx 119.76 host 120.00 jit 1.3 max 30.1 burst 36 | q 1>0 avg 1.9 lost 0
-00:01:31 - SDL Info (0): FQrx 120.25 host 120.00 jit 1.3 max 23.4 burst 38 | q 0>1 avg 1.9 lost 0
-00:01:36 - SDL Info (0): FQrx 119.82 host 120.00 jit 1.2 max 25.7 burst 31 | q 1>0 avg 1.9 lost 0
-00:01:41 - SDL Info (0): FQrx 120.17 host 119.99 jit 1.0 max 24.3 burst 24 | q 0>1 avg 1.9 lost 0
-00:01:46 - SDL Info (0): FQrx 119.99 host 120.00 jit 0.8 max 19.3 burst 15 | q 1>1 avg 1.9 lost 0
-00:01:51 - SDL Info (0): FQrx 119.80 host 120.00 jit 0.9 max 19.8 burst 15 | q 1>0 avg 1.9 lost 0
-00:01:56 - SDL Info (0): FQrx 120.20 host 120.01 jit 1.0 max 19.4 burst 19 | q 0>1 avg 1.9 lost 0
-00:02:01 - SDL Info (0): FQrx 120.00 host 119.99 jit 1.2 max 104.0 burst 28 | q 1>1 avg 1.9 lost 0
-00:02:06 - SDL Info (0): FQrx 120.00 host 120.01 jit 1.4 max 26.7 burst 30 | q 1>1 avg 1.9 lost 0
-00:02:11 - SDL Info (0): FQrx 120.00 host 120.00 jit 1.3 max 24.4 burst 26 | q 1>1 avg 1.9 lost 0
-00:02:16 - SDL Info (0): FQrx 120.00 host 119.99 jit 1.3 max 24.4 burst 28 | q 1>1 avg 1.8 lost 0
-00:02:21 - SDL Info (0): FQrx 120.02 host 120.01 jit 1.3 max 21.3 burst 24 | q 1>1 avg 1.8 lost 0
-00:02:26 - SDL Info (0): FQrx 119.99 host 119.99 jit 1.3 max 25.7 burst 29 | q 1>1 avg 1.8 lost 0
-00:02:31 - SDL Info (0): FQrx 119.91 host 120.00 jit 1.4 max 25.0 burst 32 | q 1>1 avg 1.9 lost 0
-00:02:36 - SDL Info (0): FQrx 120.09 host 120.00 jit 1.4 max 27.8 burst 31 | q 1>1 avg 1.9 lost 0
-00:02:41 - SDL Info (0): FQrx 34.62 host 35.06 jit 1.9 max 66.0 burst 4 | q 1>0 avg 1.7 lost 0
-00:02:46 - SDL Info (0): FQrx 16.00 host 16.00 jit 2.7 max 75.5 burst 0 | q 0>0 avg 1.4 lost 0
-00:02:51 - SDL Info (0): FQrx 16.00 host 16.00 jit 2.5 max 66.6 burst 0 | q 0>0 avg 1.1 lost 0
-00:02:56 - SDL Info (0): FQrx 16.00 host 16.00 jit 2.3 max 68.8 burst 0 | q 0>0 avg 1.0 lost 0
-*/
-
-// Tracks frame arrival timing, before reassembly and decoding, using the receive
-// time of the first packet of each frame. Once per second
-// a compact summary is written to the debug log:
-//
-//   FQrx 59.94 host 59.96 jit 0.6 max 3.1 burst 0 | q 1>2 avg 1.4 loss 0
-//
-//   FQrx  - measured arrival rate in fps
-//   host  - frame rate implied by RTP timestamp deltas, i.e. the server's send pacing.
-//           host > display refresh rate means the queue must grow without drops
-//   jit   - mean |arrival delta - rtp delta| in ms; how much the network distorts
-//           the server's spacing
-//   max   - largest gap between consecutive arrivals in ms
-//   burst - frames that arrived at less than half their rtp spacing (back-to-back)
-//   q     - FrameQueue depth at window start > end, and the pacer's running average
-//   loss  - frames lost on the network during the window
-void Stats::TrackFrameArrival(AVFrame *frame, int droppedFramesPacer)
-{
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    uint64_t rxUs = 0;
-    if (frame->opaque_ref) {
-        auto *data = reinterpret_cast<MLFrameData *>(frame->opaque_ref->data);
-        rxUs = data->receiveTimeUs;
-    }
-    const uint32_t rtpTs = frame->pts;
-    ARRIVAL_STATS& a = m_ArrivalStats;
-
-    if (rxUs == 0) {
-        return;
-    }
-
-    if (a.windowStartUs == 0) {
-        // First frame of the stream seeds the window
-        a.windowStartUs = rxUs;
-        a.firstRxUs = a.lastRxUs = rxUs;
-        a.firstRtpTs = a.lastRtpTs = rtpTs;
-        a.frames = 1;
-        a.queueAtWindowStart = (int) FrameQueue::instance().count();
-        return;
-    }
-
-    const double rxDeltaMs = (double) (rxUs - a.lastRxUs) / 1000.0;
-    const double rtpDeltaMs = (double) (uint32_t) (rtpTs - a.lastRtpTs) / 90.0;  // wrap-safe
-
-    a.frames++;
-    a.drops += droppedFramesPacer;
-    a.deltaMaxMs = std::max(a.deltaMaxMs, rxDeltaMs);
-    a.jitterSumMs += std::abs(rxDeltaMs - rtpDeltaMs);
-    if (rtpDeltaMs > 0.0 && rxDeltaMs < rtpDeltaMs * 0.5) {
-        a.bursts++;
-    }
-    if (rxDeltaMs >= rtpDeltaMs * 2.0) {
-        a.stalls++;
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "  stall %u rxDeltaMs %.3f rtpDeltaMs %.3f drop %u",
-            a.stalls, rxDeltaMs, rtpDeltaMs, droppedFramesPacer);
-    }
-    a.lastRxUs = rxUs;
-    a.lastRtpTs = rtpTs;
-
-    //ImGuiPlots::instance().observeFloat(PLOT_RX_FRAMETIME, (float) rxDeltaMs);
-
-    if (rxUs - a.windowStartUs < 2 * 1000000) {
-        return;
-    }
-
-    // Window complete, summarize and reset
-    const uint32_t rxIntervals = a.frames - 1;
-    const uint64_t rxSpanUs = a.lastRxUs - a.firstRxUs;
-    const double rxFps = rxSpanUs ? (double) rxIntervals * 1e6 / (double) rxSpanUs : 0.0;
-
-    // Pacer-dropped frames still advance the rtp clock, count them as intervals
-    const uint32_t rtpIntervals = rxIntervals + a.drops;
-    const uint32_t rtpSpan90k = (uint32_t) (a.lastRtpTs - a.firstRtpTs);  // wrap-safe
-    const double hostFps = rtpSpan90k ? (double) rtpIntervals * 90000.0 / (double) rtpSpan90k : 0.0;
-
-    const int queueNow = (int) FrameQueue::instance().count();
-
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-        "FQrx %.2f host %.2f jit %.1f max %.1f burst %u stall %u | q %d>%d avg %.1f drop %u",
-        rxFps,
-        hostFps,
-        rxIntervals ? a.jitterSumMs / rxIntervals : 0.0,
-        a.deltaMaxMs,
-        a.bursts,
-        a.stalls,
-        a.queueAtWindowStart,
-        queueNow,
-        m_avgQueueSize,
-        a.drops);
-
-    // Current frame becomes the first sample of the next window
-    a.windowStartUs = rxUs;
-    a.firstRxUs = rxUs;
-    a.firstRtpTs = rtpTs;
-    a.frames = 1;
-    a.drops = 0;
-    a.bursts = 0;
-    a.stalls = 0;
-    a.jitterSumMs = 0.0;
-    a.deltaMaxMs = 0.0;
-    a.queueAtWindowStart = queueNow;
-}
-
 // Time in milliseconds we spent decoding one frame, it is added up to later be divided by decodedFrames
 void Stats::SubmitDecodeTimeUs(uint64_t decodeUs)
 {
@@ -430,6 +297,22 @@ void Stats::formatVideoStats(VIDEO_STATS& stats, char* output, size_t length)
     output[offset] = 0;
 
     switch (m_VideoFormat) {
+        case VIDEO_FORMAT_PYROWAVE:
+            codecString = "PyroWave";
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE_444:
+            codecString = "PyroWave 4:4:4";
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE10_420:
+            codecString = LiGetCurrentHostDisplayHdrMode() ? "PyroWave 10-bit HDR" : "PyroWave 10-bit SDR";
+            break;
+
+        case VIDEO_FORMAT_PYROWAVE10_444:
+            codecString = LiGetCurrentHostDisplayHdrMode() ? "PyroWave 10-bit HDR 4:4:4" : "PyroWave 10-bit SDR 4:4:4";
+            break;
+
         case VIDEO_FORMAT_H264:
             codecString = "H.264";
             break;
