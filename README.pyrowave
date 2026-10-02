@@ -25,6 +25,10 @@ Build from the repository root with Qt's qmake on PATH:
 
 Use the existing PyroWave codec option in Settings or --video-codec PyroWave on the CLI. HDR and YUV444 choose the corresponding 10-bit and 4:4:4 profiles. CONFIG+=pyrowave-vulkan selects the existing MoltenVK/libplacebo implementation on macOS; its existing CMake/Granite build is still required. Linux CONFIG+=pyrowave continues using Vulkan. Builds without PyroWave are unchanged.
 
+PyroWave's bitrate slider allows 450 Mbps normally and 1,500 Mbps with
+"Unlock bitrate limit" enabled, three times the limits for other codecs.
+The CLI uses the unlocked ceiling for its range warning; --bitrate is in Kbps.
+
 For lower latency with fixed-sync Metal presentation, select Immediate pacing and
 two frames in flight in the Metal dev UI. Three frames provide more headroom
 for bursty arrivals. Immediate mode selects the newest

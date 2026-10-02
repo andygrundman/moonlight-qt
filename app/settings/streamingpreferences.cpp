@@ -402,6 +402,12 @@ void StreamingPreferences::save()
     settings.setValue(SER_VTMETALFRAMESINFLIGHT, vtMetalFramesInFlight);
 }
 
+int StreamingPreferences::getMaximumBitrate(VideoCodecConfig codec, bool unlocked)
+{
+    const int maximumBitrate = unlocked ? 500000 : 150000;
+    return codec == VCC_FORCE_PYROWAVE ? maximumBitrate * 3 : maximumBitrate;
+}
+
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)
 {
     // Don't scale bitrate linearly beyond 60 FPS. It's definitely not a linear
