@@ -475,7 +475,7 @@ void Stats::formatVideoStats(VIDEO_STATS& stats, char* output, size_t length)
         ret = snprintf(&output[offset],
                        length - offset,
                        "Frames dropped by your network connection: %.2f%%\n"
-                       "Frames dropped due to network jitter: %.2f%%\n"
+                       "Frames dropped by frame pacing: %.2f%%\n"
                        "Average network latency: %s\n"
                        "Average reassembly/decoding time: %.2f/%.2f ms\n"
                        "Average frames in queue: %.1f\n"

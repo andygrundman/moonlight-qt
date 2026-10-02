@@ -40,6 +40,9 @@ class FrameQueue
 
     int enqueue(AVFrame* frame);
     AVFrame* dequeue();
+    // Select the freshest decoded frame for Immediate mode and release older
+    // queued frames. The selection is atomic with respect to enqueue().
+    AVFrame* dequeueLatest(int& droppedCount);
     AVFrame* dequeueWithTimeout(double timeoutSeconds);
     void dropFrame(AVFrame* frame);
     void waitForEnqueue(int num = 1, double timeoutMs = 1000.0 / 60);

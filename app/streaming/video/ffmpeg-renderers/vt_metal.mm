@@ -1080,7 +1080,13 @@ public:
                 }
                 lastAtTime = targetTime;
             }
-            pfi.atTime = targetTime;
+            // Immediate mode presents at the next available vblank. Scheduling
+            // another interval ahead adds latency and can exhaust the drawable
+            // pool before the next frame is rendered. Display-locked mode still
+            // uses the explicit deadline to maintain its cadence.
+            if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
+                pfi.atTime = targetTime;
+            }
 
             if (pfi.pacingMode == StreamingPreferences::FRAME_PACING_DISPLAY_LOCKED) {
                 pfi.afterMinimumDuration = interval;

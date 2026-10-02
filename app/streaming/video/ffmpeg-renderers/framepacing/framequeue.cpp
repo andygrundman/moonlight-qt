@@ -243,6 +243,19 @@ AVFrame* FrameQueue::dequeue()
     return entry.frame;
 }
 
+AVFrame* FrameQueue::dequeueLatest(int& droppedCount)
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    droppedCount = 0;
+
+    while (m_Count > 1) {
+        dropFrame(popEntry().frame);
+        ++droppedCount;
+    }
+
+    return popEntry().frame;
+}
+
 AVFrame* FrameQueue::dequeueWithTimeout(double timeoutSeconds)
 {
     std::unique_lock<std::mutex> lock(m_Mutex);

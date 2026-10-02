@@ -426,16 +426,17 @@ bool FramePacer::renderOnMainThread()
 // skips Present and relies on the system to continue showing the previous frame.
 bool FramePacer::renderModeImmediate()
 {
-    AVFrame* newFrame = FrameQueue::instance().dequeue();
+    int droppedCount = 0;
+    const bool useLatestFrame = m_Renderer->getRendererType() == IFFmpegRenderer::RendererType::VTMetal;
+    AVFrame* newFrame = useLatestFrame ? FrameQueue::instance().dequeueLatest(droppedCount) :
+                                       FrameQueue::instance().dequeue();
     if (!newFrame) {
         return false;
     }
 
-    int droppedCount = 0;
     int queueDepth = static_cast<int>(FrameQueue::instance().count());
 
-    // If we are behind, catch up by taking one more frame and dropping the older one.
-    if (queueDepth > FRAME_QUEUE_LOW) {
+    if (!useLatestFrame && queueDepth > FRAME_QUEUE_LOW) {
         AVFrame* newerFrame = FrameQueue::instance().dequeue();
         if (newerFrame) {
             FrameQueue::instance().dropFrame(newFrame);

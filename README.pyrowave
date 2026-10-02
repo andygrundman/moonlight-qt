@@ -25,6 +25,14 @@ Build from the repository root with Qt's qmake on PATH:
 
 Use the existing PyroWave codec option in Settings or --video-codec PyroWave on the CLI. HDR and YUV444 choose the corresponding 10-bit and 4:4:4 profiles. CONFIG+=pyrowave-vulkan selects the existing MoltenVK/libplacebo implementation on macOS; its existing CMake/Granite build is still required. Linux CONFIG+=pyrowave continues using Vulkan. Builds without PyroWave are unchanged.
 
+For lower latency with fixed-sync Metal presentation, select Immediate pacing and
+two frames in flight in the Metal dev UI. Three frames provide more headroom
+for bursty arrivals. Immediate mode selects the newest
+decoded frame after a backlog and presents at the next available vblank.
+Display-locked pacing retains its scheduled cadence. Compare codecs with the same
+resolution, frame rate, HDR, chroma and presentation settings; PyroWave's CPU
+submission time alone excludes its asynchronous GPU decode work.
+
 The native framing parser validates sequence geometry, block indices, record lengths and padding before passing data to the codec. Both legacy length-prefixed frames and record-framed whole frames are accepted. The protocol submodule stays at the branch's existing revision: this change does not negotiate newer record-framing features, partial RTP recovery, or a bitstream revision check. Parser support for missing-packet segments is exercised in isolation, but the production bridge currently receives only complete frames from that protocol revision.
 
 Tests on an Apple Silicon Mac:
@@ -36,5 +44,13 @@ Tests on an Apple Silicon Mac:
     build/tests-pyrowave/tst_pyrowaveprofiles
     build/tests-pyrowave/tst_pyrowaveframing
     DYLD_LIBRARY_PATH="$PWD/libs/mac/lib" build/tests-pyrowave/tst_pyrowavemetal
+
+    mkdir -p build/tests-framepacing
+    qmake tests/framepacing/framequeue.pro -o build/tests-framepacing/Makefile
+    make -C build/tests-framepacing -j8
+    DYLD_LIBRARY_PATH="$PWD/libs/mac/lib" build/tests-framepacing/tst_framequeue
+
+The frame-queue test checks newest-frame selection, FIFO behavior, ring wraparound,
+retained renderer references and concurrent enqueue/selection ownership.
 
 The GPU test exercises 4:2:0/4:4:4, 8/10-bit textures, both framings, non-block-aligned sizes, decoded pixel quality, malformed-frame recovery, texture pool exhaustion/reuse, cross-thread frame release, render event waits, and frames that outlive their decoder. Live streaming and external VRR testing are separate acceptance checks.
