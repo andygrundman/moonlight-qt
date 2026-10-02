@@ -52,6 +52,9 @@ public:
     };
     Q_ENUM(VideoCodecConfig)
 
+    Q_INVOKABLE static int
+    getMaximumBitrate(VideoCodecConfig codec, bool unlocked);
+
     enum VideoDecoderSelection
     {
         VDS_AUTO,
@@ -294,4 +297,3 @@ private:
 
     QQmlEngine* m_QmlEngine;
 };
-

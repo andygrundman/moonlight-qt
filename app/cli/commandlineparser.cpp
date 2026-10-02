@@ -417,9 +417,6 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --bitrate option
     if (parser.isSet("bitrate")) {
         preferences->bitrateKbps = parser.getIntOption("bitrate");
-        if (!inRange(preferences->bitrateKbps, 500, 500000)) {
-            fprintf(stderr, "Warning: Bitrate is out of the supported range (500 - 500000 Kbps). Performance may suffer!\n");
-        }
     } else if (displaySet || parser.isSet("fps")) {
         preferences->bitrateKbps = preferences->getDefaultBitrate(
             preferences->width, preferences->height, preferences->fps, preferences->enableYUV444);
@@ -502,6 +499,15 @@ void StreamCommandLineParser::parse(const QStringList &args, StreamingPreference
     // Resolve --video-codec option
     if (parser.isSet("video-codec")) {
         preferences->videoCodecConfig = mapValue(m_VideoCodecMap, parser.getChoiceOptionValue("video-codec"));
+    }
+
+    // Validate after resolving the codec so explicit and saved selections agree.
+    if (parser.isSet("bitrate")) {
+        const int maximumBitrate = StreamingPreferences::getMaximumBitrate(preferences->videoCodecConfig, true);
+        if (!inRange(preferences->bitrateKbps, 500, maximumBitrate)) {
+            fprintf(stderr, "Warning: Bitrate is out of the supported range (500 - %d Kbps). Performance may suffer!\n",
+                    maximumBitrate);
+        }
     }
 
     // Resolve --video-decoder option
