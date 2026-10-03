@@ -8,5 +8,6 @@ macx {
     metalcodec.makefile = Makefile.metalcodec
     metalroundtrip.file = $$PWD/metalroundtrip.pro
     metalroundtrip.depends = metalcodec
-    SUBDIRS += metalcodec metalroundtrip
+    hdr.file = $$PWD/../hdr/hdr.pro
+    SUBDIRS += metalcodec metalroundtrip hdr
 }

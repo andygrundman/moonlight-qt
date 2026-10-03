@@ -1,6 +1,6 @@
 #include "input.h"
 
-#include "imgui.h"
+#include "imgui/imgui_input.h"
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "streaming/streamutils.h"
@@ -241,12 +241,9 @@ bool SdlInputHandler::isMouseInVideoRegion(int mouseX, int mouseY, int windowWid
     SDL_Rect src, dst;
 
 #ifndef IMGUI_DISABLE
-    if (ImGui::GetCurrentContext()) {
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureMouse) {
-            // ImGui has control of the mouse
-            return false;
-        }
+    if (ImGuiInput::instance().wantsMouse()) {
+        // ImGui has control of the mouse.
+        return false;
     }
 #endif
 

@@ -26,6 +26,7 @@
 #include "imgui/devui.h"
 #include "imgui/gamepadmenu.h"
 #include "imgui/imgui_plots.h"
+#include "imgui/imgui_input.h"
 #include "streaming/stats.h"
 
 #import <Cocoa/Cocoa.h>
@@ -38,19 +39,6 @@
 extern "C" {
     #include <libavutil/pixdesc.h>
 }
-
-struct CscParams
-{
-    simd_half3x3 matrix;
-    simd_half3 offsets;
-};
-
-struct ParamBuffer
-{
-    CscParams cscParams;
-    simd_half2 chromaOffset;
-    simd_half1 bitnessScaleFactor;
-};
 
 struct Vertex
 {
@@ -379,14 +367,15 @@ public:
 
     void* getPyroWaveMetalDevice() override { return (void*)m_CommandQueue.device; }
 
-    int getBitnessScaleFactor(AVFrame* frame)
+    float getBitnessScaleFactor(AVFrame* frame)
     {
 #ifdef HAVE_PYROWAVE_METAL
         if (pyroWaveMetalFrame(frame)) return 1;
 #endif
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-            // VideoToolbox frames never require scaling
-            return 1;
+            // CoreVideo stores 10-bit samples in the upper bits of a 16-bit
+            // UNORM channel. Correct its 65535 denominator to 1023.
+            return getFrameBitsPerChannel(frame) == 10 ? vtUnormScale(10, 16, 6) : 1.0f;
         }
         else {
             const AVPixFmtDescriptor* formatDesc = av_pix_fmt_desc_get((AVPixelFormat)frame->format);
@@ -398,43 +387,30 @@ public:
 
             // This assumes plane 0 is exclusively the Y component
             SDL_assert(formatDesc->comp[0].step == 1 || formatDesc->comp[0].step == 2);
-            int shift = (formatDesc->comp[0].step * 8) - formatDesc->comp[0].depth;
-            return 1 << shift;
+            return vtUnormScale(formatDesc->comp[0].depth,
+                                formatDesc->comp[0].step * 8, formatDesc->comp[0].shift);
         }
     }
 
     bool updateColorSpaceForFrame(AVFrame* frame)
     {
+        updateHdrMetadataForFrame(frame);
+        if (m_DisplayHdrMetadataChanged.exchange(false)) m_HdrMetadataChanged = true;
         if (!hasFrameFormatChanged(frame) && !m_HdrMetadataChanged) {
             return true;
         }
 
         int colorspace = getFrameColorspace(frame);
-        CGColorSpaceRef newColorSpace;
-        MTLPixelFormat newPixelFormat;
-        ParamBuffer paramBuffer;
-
-        switch (colorspace) {
-        case COLORSPACE_REC_709:
-            newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
-            newPixelFormat = MTLPixelFormatBGRA8Unorm;
-            break;
-        case COLORSPACE_REC_2020:
-            newPixelFormat = MTLPixelFormatBGR10A2Unorm;
-            if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
-                // https://developer.apple.com/documentation/metal/hdr_content/using_color_spaces_to_display_hdr_content
-                newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
-            }
-            else {
-                newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2020);
-            }
-            break;
-        default:
-        case COLORSPACE_REC_601:
-            newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-            newPixelFormat = MTLPixelFormatBGRA8Unorm;
-            break;
-        }
+        const bool pq = frame->color_trc == AVCOL_TRC_SMPTE2084;
+        const bool hdr = pq || frame->color_trc == AVCOL_TRC_ARIB_STD_B67;
+        const bool linearPQ = m_UseEDR && pq;
+        // Freeze this frame's scale. A screen notification may arrive between
+        // layer configuration and submission; it must not change the shader's
+        // normalization until the corresponding EDR metadata is updated.
+        m_ActiveReferenceWhite = m_ReferenceWhite.load();
+        CGColorSpaceRef newColorSpace = CGColorSpaceCreateWithName(vtColorSpaceName(frame, colorspace, linearPQ));
+        MTLPixelFormat newPixelFormat = vtMetalPixelFormat(frame, getFrameBitsPerChannel(frame), m_UseEDR);
+        VTMetalCscParams paramBuffer = {};
 
         std::array<float, 9> cscMatrix;
         std::array<float, 3> yuvOffsets;
@@ -442,65 +418,39 @@ public:
         getFramePremultipliedCscConstants(frame, cscMatrix, yuvOffsets);
         getFrameChromaCositingOffsets(frame, chromaOffset);
 
-        paramBuffer.cscParams.matrix = simd_matrix(simd_make_half3(cscMatrix[0], cscMatrix[3], cscMatrix[6]),
-                                                   simd_make_half3(cscMatrix[1], cscMatrix[4], cscMatrix[7]),
-                                                   simd_make_half3(cscMatrix[2], cscMatrix[5], cscMatrix[8]));
-        paramBuffer.cscParams.offsets = simd_make_half3(yuvOffsets[0],
+        paramBuffer.matrix = simd_matrix(simd_make_float3(cscMatrix[0], cscMatrix[3], cscMatrix[6]),
+                                                   simd_make_float3(cscMatrix[1], cscMatrix[4], cscMatrix[7]),
+                                                   simd_make_float3(cscMatrix[2], cscMatrix[5], cscMatrix[8]));
+        paramBuffer.offsets = simd_make_float3(yuvOffsets[0],
                                                         yuvOffsets[1],
                                                         yuvOffsets[2]);
-        paramBuffer.chromaOffset = simd_make_half2(chromaOffset[0],
+        paramBuffer.chromaOffset = simd_make_float2(chromaOffset[0],
                                                    chromaOffset[1]);
 
-        if (m_UseEDR && frame->color_trc == AVCOL_TRC_SMPTE2084) {
-            // EDR requires a linear floating-point pixel format
-            newPixelFormat = MTLPixelFormatRGBA16Float;
-
-            // change to linear colorspace
-            CFStringRef name;
-            switch (colorspace) {
-                case COLORSPACE_REC_2020:
-                    name = kCGColorSpaceExtendedLinearITUR_2020;
-                    break;
-                case COLORSPACE_REC_601:
-                    name = kCGColorSpaceExtendedLinearSRGB;
-                    break;
-                case COLORSPACE_REC_709:
-                default:
-                    name = kCGColorSpaceExtendedLinearSRGB;
-                    break;
+        // In linear mode, the shader only decodes PQ to absolute nits.
+        // Core Animation is the sole tone mapper, including on SDR displays.
+        CAEDRMetadata* edrMetadata = nil;
+        if (linearPQ) {
+            if (!m_OverrideNits && m_MasteringDisplayColorVolume != nullptr) {
+                edrMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
+                                                           contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
+                                                    opticalOutputScale:m_ActiveReferenceWhite];
             }
-
-            CGColorSpaceRelease(newColorSpace);
-            newColorSpace = CGColorSpaceCreateWithName(name);
-
-            // MDCV contains min/max values from the host
-            // The user can override this if they want to
-            if (m_OverrideNits) {
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "EDR using user-selected min/max nits %.4f/%.2f, referenceWhite %.2f",
-                            m_MinNits, m_MaxNits, m_ReferenceWhite);
-                m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:m_MinNits
-                                                                           maxLuminance:m_MaxNits
-                                                                     opticalOutputScale:m_ReferenceWhite];
-            }
-            else if (m_MasteringDisplayColorVolume != nullptr) {
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                            "EDR using MasteringDisplayColorVolume from host: min/max nits %.4f/%.2f, referenceWhite %.2f",
-                            m_MinNits, m_MaxNits, m_ReferenceWhite);
-                m_MetalLayer.EDRMetadata = [CAEDRMetadata HDR10MetadataWithDisplayInfo:(__bridge NSData*)m_MasteringDisplayColorVolume
-                                                                           contentInfo:(__bridge NSData*)m_ContentLightLevelInfo
-                                                                    opticalOutputScale:m_ReferenceWhite];
+            else {
+                edrMetadata = [CAEDRMetadata HDR10MetadataWithMinLuminance:m_MinNits
+                                                           maxLuminance:m_MaxNits
+                                                     opticalOutputScale:m_ActiveReferenceWhite];
             }
         }
-        else {
-            m_MetalLayer.EDRMetadata = nullptr;
-        }
+        m_NeedNewDrawable = m_NeedNewDrawable || m_MetalLayer.pixelFormat != newPixelFormat;
 
         // Set the new colorspace and pixelFormat, must be done on main thread
         // or we risk a "Deleted thread with uncommitted CATransaction" error when the render thread exits
         dispatch_sync(dispatch_get_main_queue(), ^{
             m_MetalLayer.pixelFormat = newPixelFormat;
             m_MetalLayer.colorspace = newColorSpace;
+            m_MetalLayer.wantsExtendedDynamicRangeContent = hdr;
+            m_MetalLayer.EDRMetadata = edrMetadata;
         });
 
         // Get a new drawable if the pixel format was changed
@@ -586,31 +536,23 @@ public:
 
         auto texture = m_SwMappingTextures[m_CurrentBuffer][planeIndex];
 
-        // Recreate the texture if the plane size changes
-        if (texture && (texture.width != planeWidth || texture.height != planeHeight)) {
+        MTLPixelFormat metalFormat;
+        switch (formatDesc->comp[planeIndex].step) {
+        case 1: metalFormat = MTLPixelFormatR8Unorm; break;
+        case 2: metalFormat = MTLPixelFormatR16Unorm; break;
+        default:
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Unhandled plane step: %d (plane: %d)",
+                         formatDesc->comp[planeIndex].step, planeIndex);
+            return nil;
+        }
+        // A bit-depth change can happen without a resolution change.
+        if (texture && (texture.width != planeWidth || texture.height != planeHeight || texture.pixelFormat != metalFormat)) {
             [texture release];
             texture = nil;
+            m_SwMappingTextures[m_CurrentBuffer][planeIndex] = nil;
         }
 
         if (!texture) {
-            MTLPixelFormat metalFormat;
-
-            switch (formatDesc->comp[planeIndex].step) {
-            case 1:
-                metalFormat = MTLPixelFormatR8Unorm;
-                break;
-            case 2:
-                metalFormat = MTLPixelFormatR16Unorm;
-                break;
-            default:
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                             "Unhandled plane step: %d (plane: %d)",
-                             formatDesc->comp[planeIndex].step,
-                             planeIndex);
-                SDL_assert(false);
-                return nil;
-            }
-
             auto texDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:metalFormat
                                                                               width:planeWidth
                                                                              height:planeHeight
@@ -761,13 +703,16 @@ public:
         }
         [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
         if (m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float) {
-            float currentEDR = m_CurrentEDR.load();
-            [renderEncoder setFragmentBytes:&currentEDR length:sizeof(float) atIndex:1];
-            [renderEncoder setFragmentBytes:&m_ReferenceWhite length:sizeof(float) atIndex:2];
-            [renderEncoder setFragmentBytes:&m_MaxNits length:sizeof(float) atIndex:3];
+            float referenceWhite = m_ActiveReferenceWhite;
+            [renderEncoder setFragmentBytes:&referenceWhite length:sizeof(float) atIndex:2];
         }
         [renderEncoder setFragmentBuffer:m_CscParamsBuffer offset:0 atIndex:0];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+
+        // SDR overlays need the video's gamut and transfer function, too.
+        auto overlayParams = vtMetalOverlayParams(frame, getFrameColorspace(frame),
+            m_MetalLayer.pixelFormat == MTLPixelFormatRGBA16Float, m_ActiveReferenceWhite);
+        [renderEncoder setFragmentBytes:&overlayParams length:sizeof(overlayParams) atIndex:4];
 
         // Now draw any overlays that are enabled
         for (int i = 0; i < Overlay::OverlayMax; i++) {
@@ -818,6 +763,7 @@ public:
         // avoid a crash at shutdown due to ImGui calling SDL
         // TODO; refactor this out to a parent class
         if (!FramePacer::instance().stopping()) {
+            ImGuiInput::instance().processPendingEvents();
             ImGui_ImplMetal_NewFrame(m_RenderPassDescriptor);
             ImGui_ImplSDL2_NewFrame();
             ImGui::NewFrame();
@@ -837,6 +783,7 @@ public:
 
             ImGui::EndFrame();
             ImGui::Render();
+            ImGuiInput::instance().updateCapture();
             ImDrawData* draw_data = ImGui::GetDrawData();
             ImGui_ImplMetal_RenderDrawData(draw_data, commandBuffer, renderEncoder);
         }
@@ -975,7 +922,7 @@ public:
             pfi.currentEDR = m_CurrentEDR.load();
             pfi.maxPotentialEDR = m_MaxPotentialEDR;
             pfi.maxReferenceEDR = m_MaxReferenceEDR;
-            pfi.referenceWhite = m_ReferenceWhite;
+            pfi.referenceWhite = m_ActiveReferenceWhite;
             pfi.maxNits = m_MaxNits;
         }
 
@@ -1642,7 +1589,11 @@ public:
     {
         m_MaxPotentialEDR = screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
         m_MaxReferenceEDR = screen.maximumReferenceExtendedDynamicRangeColorComponentValue;
-        m_ReferenceWhite  = m_MaxReferenceEDR > 1.0 ? 100.0f : 203.0f; // SDR is 100 nits in MBP's HDR Video preset (reference mode)
+        // Keep shader normalization and opticalOutputScale synchronized when
+        // moving between a reference display and an ordinary EDR display.
+        float referenceWhite = m_MaxReferenceEDR > 1.0 ? 100.0f : 203.0f;
+        if (m_ReferenceWhite.exchange(referenceWhite) != referenceWhite)
+            m_DisplayHdrMetadataChanged.store(true);
 
         float currentEDR = screen.maximumExtendedDynamicRangeColorComponentValue;
         if (currentEDR != m_CurrentEDR.load()) {
@@ -1787,20 +1738,20 @@ public:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of useEDR to %d", m_UseEDR);
         }
 
-        if (m_ReferenceWhite != cfg.referenceWhite) {
+        if (std::isfinite(cfg.referenceWhite) && cfg.referenceWhite > 0 && m_ReferenceWhite != cfg.referenceWhite) {
             m_ReferenceWhite = cfg.referenceWhite;
             m_HdrMetadataChanged = true;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of ReferenceWhite to %.2f", m_ReferenceWhite);
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of ReferenceWhite to %.2f", m_ReferenceWhite.load());
         }
 
-        if (m_MinNits != cfg.minNits) {
+        if (std::isfinite(cfg.minNits) && cfg.minNits >= 0 && cfg.minNits < m_MaxNits && m_MinNits != cfg.minNits) {
             m_MinNits = cfg.minNits;
             m_HdrMetadataChanged = true;
             m_OverrideNits = true;
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Applied change of MinNits to %.4f", m_MinNits);
         }
 
-        if (m_MaxNits != cfg.maxNits) {
+        if (std::isfinite(cfg.maxNits) && cfg.maxNits > m_MinNits && cfg.maxNits <= 10000 && m_MaxNits != cfg.maxNits) {
             m_MaxNits = cfg.maxNits;
             m_HdrMetadataChanged = true;
             m_OverrideNits = true;
@@ -1868,7 +1819,9 @@ private:
     float m_MaxPotentialEDR;
     std::atomic<float> m_CurrentEDR;
     float m_MaxReferenceEDR;
-    float m_ReferenceWhite;
+    std::atomic<float> m_ReferenceWhite;
+    float m_ActiveReferenceWhite = 203.0f;
+    std::atomic<bool> m_DisplayHdrMetadataChanged{false};
     int m_RequestedPresentMode;
     CFTimeInterval m_MinRefreshInterval;
     CFTimeInterval m_MaxRefreshInterval;
@@ -1930,6 +1883,9 @@ IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     if (_note) {
         [[NSNotificationCenter defaultCenter] removeObserver:_note];
         _note = nil;
+    }
+    if (_note2) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_note2];
         _note2 = nil;
     }
 }

@@ -39,7 +39,6 @@ public:
           m_FormatDesc(nullptr),
           m_StreamView(nullptr),
           m_DisplayLink(nullptr),
-          m_LastColorSpace(-1),
           m_ColorSpace(nullptr),
           m_VsyncMutex(nullptr),
           m_VsyncPassed(nullptr)
@@ -219,47 +218,19 @@ public:
         // these attachments for consistent behavior.
         CVBufferRemoveAttachment(pixBuf, kCVImageBufferPixelAspectRatioKey);
 
-        // Reset m_ColorSpace if the colorspace changes. This can happen when
-        // a game enters HDR mode (Rec 601 -> Rec 2020).
-        int colorspace = getFrameColorspace(frame);
-        if (colorspace != m_LastColorSpace) {
-            if (m_ColorSpace != nullptr) {
-                CGColorSpaceRelease(m_ColorSpace);
-                m_ColorSpace = nullptr;
-            }
-
-            switch (colorspace) {
-            case COLORSPACE_REC_709:
-                m_ColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
-                break;
-            case COLORSPACE_REC_2020:
-                // This is necessary to ensure HDR works properly with external displays on macOS Sonoma.
-                if (frame->color_trc == AVCOL_TRC_SMPTE2084) {
-                    m_ColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
-                }
-                else {
-                    m_ColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2020);
-                }
-                break;
-            case COLORSPACE_REC_601:
-                m_ColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-                break;
-            }
-
-            m_LastColorSpace = colorspace;
+        updateHdrMetadataForFrame(frame);
+        // Transfer-only changes (BT.2020 SDR <-> PQ/HLG) must also invalidate
+        // the color-space attachment, even when the YUV matrix is unchanged.
+        if (hasFrameFormatChanged(frame)) {
+            if (m_ColorSpace) CGColorSpaceRelease(m_ColorSpace);
+            m_ColorSpace = CGColorSpaceCreateWithName(vtColorSpaceName(frame, getFrameColorspace(frame)));
         }
 
         if (m_ColorSpace != nullptr) {
             CVBufferSetAttachment(pixBuf, kCVImageBufferCGColorSpaceKey, m_ColorSpace, kCVAttachmentMode_ShouldPropagate);
         }
 
-        // Attach HDR metadata if it has been provided by the host
-        if (m_MasteringDisplayColorVolume != nullptr) {
-            CVBufferSetAttachment(pixBuf, kCVImageBufferMasteringDisplayColorVolumeKey, m_MasteringDisplayColorVolume, kCVAttachmentMode_ShouldPropagate);
-        }
-        if (m_ContentLightLevelInfo != nullptr) {
-            CVBufferSetAttachment(pixBuf, kCVImageBufferContentLightLevelInfoKey, m_ContentLightLevelInfo, kCVAttachmentMode_ShouldPropagate);
-        }
+        vtAttachHdrMetadata(pixBuf, m_MasteringDisplayColorVolume, m_ContentLightLevelInfo);
 
         // If the format has changed or doesn't exist yet, construct it with the
         // pixel buffer data
@@ -482,7 +453,6 @@ private:
     dispatch_block_t m_OverlayUpdateBlocks[Overlay::OverlayMax];
     NSTextField* m_OverlayTextFields[Overlay::OverlayMax];
     CVDisplayLinkRef m_DisplayLink;
-    int m_LastColorSpace;
     CGColorSpaceRef m_ColorSpace;
     SDL_mutex* m_VsyncMutex;
     SDL_cond* m_VsyncPassed;

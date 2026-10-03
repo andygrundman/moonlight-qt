@@ -121,71 +121,43 @@ bool VTBaseRenderer::checkDecoderCapabilities(id<MTLDevice> device, PDECODER_PAR
 }
 
 void VTBaseRenderer::setHdrMode(bool enabled) {
-    // Free existing HDR metadata
-    if (m_MasteringDisplayColorVolume != nullptr) {
-        CFRelease(m_MasteringDisplayColorVolume);
-        m_MasteringDisplayColorVolume = nullptr;
+    SS_HDR_METADATA metadata = {};
+    bool available = enabled && LiGetHdrMetadata(&metadata);
+    std::lock_guard<std::mutex> guard(m_HostHdrMetadataLock);
+    m_HostHdrMetadata = metadata;
+    m_HostHdrMetadataValid = available;
+}
+
+void VTBaseRenderer::updateHdrMetadataForFrame(const AVFrame* frame) {
+    SS_HDR_METADATA host = {};
+    bool available;
+    {
+        std::lock_guard<std::mutex> guard(m_HostHdrMetadataLock);
+        host = m_HostHdrMetadata;
+        available = m_HostHdrMetadataValid;
     }
-    if (m_ContentLightLevelInfo != nullptr) {
-        CFRelease(m_ContentLightLevelInfo);
-        m_ContentLightLevelInfo = nullptr;
-    }
+    auto metadata = vtHdrMetadataForFrame(frame, available ? &host : nullptr);
+    if (m_FrameHdrMetadataInitialized && metadata == m_FrameHdrMetadata) return;
+    m_FrameHdrMetadataInitialized = true;
+    m_FrameHdrMetadata = metadata;
 
-    // Store new HDR metadata if available
-    SS_HDR_METADATA hdrMetadata;
-    if (enabled && LiGetHdrMetadata(&hdrMetadata)) {
-        if (hdrMetadata.displayPrimaries[0].x != 0 && hdrMetadata.maxDisplayLuminance != 0) {
-            // This data is all in big-endian
-            struct {
-              vector_ushort2 primaries[3];
-              vector_ushort2 white_point;
-              uint32_t luminance_max;
-              uint32_t luminance_min;
-            } __attribute__((packed, aligned(4))) mdcv;
-
-            // mdcv is in GBR order while SS_HDR_METADATA is in RGB order
-            mdcv.primaries[0].x = __builtin_bswap16(hdrMetadata.displayPrimaries[1].x);
-            mdcv.primaries[0].y = __builtin_bswap16(hdrMetadata.displayPrimaries[1].y);
-            mdcv.primaries[1].x = __builtin_bswap16(hdrMetadata.displayPrimaries[2].x);
-            mdcv.primaries[1].y = __builtin_bswap16(hdrMetadata.displayPrimaries[2].y);
-            mdcv.primaries[2].x = __builtin_bswap16(hdrMetadata.displayPrimaries[0].x);
-            mdcv.primaries[2].y = __builtin_bswap16(hdrMetadata.displayPrimaries[0].y);
-
-            mdcv.white_point.x = __builtin_bswap16(hdrMetadata.whitePoint.x);
-            mdcv.white_point.y = __builtin_bswap16(hdrMetadata.whitePoint.y);
-
-            // These luminance values are in 10000ths of a nit
-            mdcv.luminance_max = __builtin_bswap32((uint32_t)hdrMetadata.maxDisplayLuminance * 10000);
-            mdcv.luminance_min = __builtin_bswap32(hdrMetadata.minDisplayLuminance);
-
-            m_MasteringDisplayColorVolume = CFDataCreate(nullptr, (const UInt8*)&mdcv, sizeof(mdcv));
-            m_MinNits = (float)hdrMetadata.minDisplayLuminance / 10000.0f;
-            m_MaxNits = (float)hdrMetadata.maxDisplayLuminance;
-        }
-
-        if (hdrMetadata.maxContentLightLevel != 0 && hdrMetadata.maxFrameAverageLightLevel != 0) {
-            // This data is all in big-endian
-            struct {
-                uint16_t max_content_light_level;
-                uint16_t max_frame_average_light_level;
-            } __attribute__((packed, aligned(2))) cll;
-
-            cll.max_content_light_level = __builtin_bswap16(hdrMetadata.maxContentLightLevel);
-            cll.max_frame_average_light_level = __builtin_bswap16(hdrMetadata.maxFrameAverageLightLevel);
-
-            m_ContentLightLevelInfo = CFDataCreate(nullptr, (const UInt8*)&cll, sizeof(cll));
-        }
-
-        m_OverrideNits = false;
+    if (m_MasteringDisplayColorVolume) CFRelease(m_MasteringDisplayColorVolume);
+    if (m_ContentLightLevelInfo) CFRelease(m_ContentLightLevelInfo);
+    m_MasteringDisplayColorVolume = metadata.hasDisplay ?
+        CFDataCreate(nullptr, metadata.display.data(), metadata.display.size()) : nullptr;
+    m_ContentLightLevelInfo = metadata.hasContent ?
+        CFDataCreate(nullptr, metadata.content.data(), metadata.content.size()) : nullptr;
+    if (!m_OverrideNits) {
+        m_MinNits = metadata.minNits;
+        m_MaxNits = metadata.maxNits;
         DevUISettings::instance().SetConfig([=](DevUIConfig& config) {
             config.minNits = m_MinNits;
             config.maxNits = m_MaxNits;
         });
-
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "HDR Metadata updated from host: minDisplayLuminance %.4f, maxDisplayLuminance %.2f",
-                    m_MinNits, m_MaxNits);
     }
-
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Frame HDR metadata: min/max nits %.4f/%.2f, mastering %s, content light %s",
+                metadata.minNits, metadata.maxNits,
+                metadata.hasDisplay ? "present" : "absent", metadata.hasContent ? "present" : "absent");
     m_HdrMetadataChanged = true;
 }

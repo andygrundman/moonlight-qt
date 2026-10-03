@@ -223,6 +223,7 @@ SOURCES += \
     imgui/devui.cpp \
     imgui/gamepadmenu.cpp \
     imgui/imgui_plots.cpp \
+    imgui/imgui_input.cpp \
     streaming/stats.cpp
 
 HEADERS += \
@@ -267,6 +268,7 @@ HEADERS += \
     imgui/plotdesc.h \
     imgui/imgui_backend.h \
     imgui/imgui_plots.h \
+    imgui/imgui_input.h \
     streaming/stats.h
 
 # Platform-specific renderers and decoders
