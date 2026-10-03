@@ -18,6 +18,7 @@
 #include "imgui/devui.h"
 #include "imgui/gamepadmenu.h"
 #include "imgui/imgui_plots.h"
+#include "imgui/imgui_input.h"
 #include "streaming/stats.h"
 
 #include <SDL_syswm.h>
@@ -794,6 +795,7 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
     // avoid a crash at shutdown due to ImGui calling SDL
     // TODO; refactor this out to a parent class
     if (!FramePacer::instance().stopping()) {
+        ImGuiInput::instance().processPendingEvents();
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
@@ -812,6 +814,7 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
 
         ImGui::EndFrame();
         ImGui::Render();
+        ImGuiInput::instance().updateCapture();
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     }
 #endif

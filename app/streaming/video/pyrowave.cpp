@@ -23,6 +23,7 @@
     #include "imgui_impl_sdl2.h"
     #include "imgui_impl_vulkan.h"
     #include "imgui/imgui_plots.h"
+    #include "imgui/imgui_input.h"
     #include "imgui/devui.h"
     #include "imgui/gamepadmenu.h"
     #include "streaming/stats.h"
@@ -1081,6 +1082,7 @@ bool PyroWaveVideoDecoder::renderImGuiOverlay(int dw, int dh, pl_overlay* overla
         return false;
     }
 
+    ImGuiInput::instance().processPendingEvents();
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
@@ -1092,6 +1094,7 @@ bool PyroWaveVideoDecoder::renderImGuiOverlay(int dw, int dh, pl_overlay* overla
     GamepadMenu::instance().Render();
 
     ImGui::Render();
+    ImGuiInput::instance().updateCapture();
     ImDrawData* drawData = ImGui::GetDrawData();
     if (!drawData || drawData->CmdListsCount == 0) {
         return false;  // no visible UI this frame; skip the GPU work entirely

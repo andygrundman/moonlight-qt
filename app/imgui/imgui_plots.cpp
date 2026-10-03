@@ -3,6 +3,7 @@
 #include "IconsFontAwesome7.h"
 #include "fa-solid-900.h"
 #include "devui.h"
+#include "imgui_input.h"
 
 #include "imgui.h"
 #include "implot.h"
@@ -90,10 +91,12 @@ void ImGuiPlots::ImGui_init(IImGuiBackend* renderer)
     io.Fonts->AddFontFromMemoryCompressedTTF(FA_Solid_compressed_data, FA_Solid_compressed_size, 13.0f, &iconConfig);
 
     renderer->ImGui_initBackend();
+    ImGuiInput::instance().beginSession();
 }
 
 void ImGuiPlots::ImGui_deinit(IImGuiBackend* renderer)
 {
+    ImGuiInput::instance().endSession();
     renderer->ImGui_deinitBackend();
 
     ImPlot::DestroyContext();

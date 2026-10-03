@@ -1,6 +1,6 @@
 #include "streaming/session.h"
 
-#include "imgui.h"
+#include "imgui/imgui_input.h"
 #include <Limelight.h>
 #include "SDL_compat.h"
 
@@ -181,12 +181,9 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     bool shouldNotConvertToScanCodeOnServer = false;
 
 #ifndef IMGUI_DISABLE
-    if (ImGui::GetCurrentContext()) {
-        ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureKeyboard) {
-            // ImGui has control of the keyboard
-            return;
-        }
+    if (ImGuiInput::instance().wantsKeyboard()) {
+        // ImGui has control of the keyboard.
+        return;
     }
 #endif
 

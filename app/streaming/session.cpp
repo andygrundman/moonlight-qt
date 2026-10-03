@@ -3,9 +3,8 @@
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
 
-#include "imgui.h"
-#include "imgui_impl_sdl2.h"
 #include "imgui/devui.h"
+#include "imgui/imgui_input.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -2083,14 +2082,8 @@ void Session::exec()
 #endif
 
 #ifndef IMGUI_DISABLE
-        // let ImGui read keyboard/mouse events. If interacting with a UI element, we will check
-        // io.WantCaptureMouse and io.WantCaptureKeyboard below
-        if (ImGui::GetCurrentContext()) {
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.BackendPlatformUserData != nullptr) {
-                ImGui_ImplSDL2_ProcessEvent(&event);
-            }
-        }
+        // The render thread owns ImGui, including its input queue and context.
+        ImGuiInput::instance().enqueue(event);
 #endif
 
         switch (event.type) {
@@ -2423,12 +2416,6 @@ DispatchDeferredCleanup:
     // Raise any keys that are still down
     m_InputHandler->raiseAllKeys();
 
-    // Destroy the input handler now. This must be destroyed
-    // before allowwing the UI to continue execution or it could
-    // interfere with SDLGamepadKeyNavigation.
-    delete m_InputHandler;
-    m_InputHandler = nullptr;
-
     // Destroy the decoder, since this must be done on the main thread
     // NB: This must happen before LiStopConnection() for pull-based
     // decoders.
@@ -2436,6 +2423,12 @@ DispatchDeferredCleanup:
     delete m_VideoDecoder;
     m_VideoDecoder = nullptr;
     SDL_UnlockMutex(m_DecoderLock);
+
+    // ImGui's SDL backend retains gamepad handles. Stop rendering and close
+    // those handles before the input handler shuts down SDL's input subsystems.
+    // The input handler must still be gone before returning to the Qt UI.
+    delete m_InputHandler;
+    m_InputHandler = nullptr;
 
     // Propagate state changes from the SDL window back to the Qt window
     //

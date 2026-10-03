@@ -1,6 +1,7 @@
 #include "pyrowavemetal.h"
 #include "pyrowavedecoder.h"
 #include "path.h"
+#include "streaming/video/ffmpeg-renderers/vt_colorspace.h"
 #include <pyrowave_metal.h>
 #include <SDL.h>
 #include <array>
@@ -251,18 +252,17 @@ bool PyroWaveMetalCalibrationRenderer::present(AVFrame* frame, bool hdr) { @auto
     struct Vertex { simd_float4 position; simd_float2 uv; };
     const Vertex vertices[] = {{{-1, -1, 0, 1}, {0, 1}}, {{1, -1, 0, 1}, {1, 1}},
                               {{-1, 1, 0, 1}, {0, 0}}, {{1, 1, 0, 1}, {1, 0}}};
-    struct Params { simd_half3x3 matrix; simd_half3 offsets; simd_half2 chromaOffset; simd_half1 scale; };
-    Params params = {};
+    VTMetalCscParams params = {};
     // Match the stream's limited-range BT.709/BT.2020 conversion.
     const int bits = hdr ? 10 : 8, range = 1 << bits, factor = 1 << (bits - 8);
     const float yScale = float(range - 1) / (219 * factor);
     const float uvScale = float(range - 1) / (224 * factor);
-    params.matrix = simd_matrix(simd_make_half3(yScale, 0, (hdr ? 1.4746f : 1.5748f) * uvScale),
-        simd_make_half3(yScale, (hdr ? -0.1646f : -0.1873f) * uvScale, (hdr ? -0.5714f : -0.4681f) * uvScale),
-        simd_make_half3(yScale, (hdr ? 1.8814f : 1.8556f) * uvScale, 0));
-    params.offsets = simd_make_half3(float(16 * factor) / (range - 1),
+    params.matrix = simd_matrix(simd_make_float3(yScale, 0, (hdr ? 1.4746f : 1.5748f) * uvScale),
+        simd_make_float3(yScale, (hdr ? -0.1646f : -0.1873f) * uvScale, (hdr ? -0.5714f : -0.4681f) * uvScale),
+        simd_make_float3(yScale, (hdr ? 1.8814f : 1.8556f) * uvScale, 0));
+    params.offsets = simd_make_float3(float(16 * factor) / (range - 1),
         float(range / 2) / (range - 1), float(range / 2) / (range - 1));
-    params.scale = 1;
+    params.bitnessScaleFactor = 1;
     auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = impl.target;
     pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
