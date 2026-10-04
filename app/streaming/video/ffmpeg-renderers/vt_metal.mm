@@ -102,7 +102,6 @@ public:
           m_MetalLayer(nullptr),
           m_TextureCache(nullptr),
           m_CVMetalTextures{},
-          m_Activity(nullptr),
           m_CscParamsBuffer(nullptr),
           m_VideoVertexBuffer(nullptr),
           m_OverlayTextures{},
@@ -241,14 +240,6 @@ public:
         if (m_MetalView != nullptr) {
             SDL_Metal_DestroyView(m_MetalView);
         }
-
-        // Reduce our process priority
-        // if (m_Activity != nullptr) {
-        //     [[NSProcessInfo processInfo] endActivity:m_Activity];
-        //     [m_Activity release];
-        //     m_Activity = nullptr;
-        //     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Ending macOS latency-critical activity.");
-        // }
     }}
 
 #ifndef IMGUI_DISABLE
@@ -1220,7 +1211,7 @@ public:
 
     id<MTLDevice> getMetalDevice() {
         StreamingPreferences *prefs = StreamingPreferences::get();
-        if (prefs->renderer == StreamingPreferences::RENDERER_AVSAMPLEBUFFER || qgetenv("VT_FORCE_METAL") == "0") {
+        if (prefs->rendererSelection == StreamingPreferences::RS_AVSBDL || qgetenv("VT_FORCE_METAL") == "0") {
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Avoiding Metal renderer due to VT_FORCE_METAL=0 override.");
             return nullptr;
@@ -1369,12 +1360,6 @@ public:
                             "V-sync enforced when running in a window");
             }
         }
-
-        // This doesn't seem to produce any benefit...
-        // m_Activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical
-        //                                                                reason:@"Moonlight low-latency"];
-        // [m_Activity retain];
-        // SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Begin macOS latency-critical activity.");
 
         return true;
     }}
@@ -1850,7 +1835,6 @@ private:
     CAMetalLayer* m_MetalLayer;
     CVMetalTextureCacheRef m_TextureCache;
     CVMetalTextureRef m_CVMetalTextures[MAX_FRAMES_IN_FLIGHT][MAX_VIDEO_PLANES];
-    id<NSObject> m_Activity;
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];

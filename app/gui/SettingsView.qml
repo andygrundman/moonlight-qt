@@ -693,7 +693,7 @@ Flickable {
 
                         stepSize: 500
                         from : 500
-                        to: StreamingPreferences.unlockBitrate ? 500000 : 150000
+                        to: StreamingPreferences.unlockBitrate ? 2500000 : 150000
 
                         snapMode: "SnapOnRelease"
                         width: Math.min(bitrateDesc.implicitWidth, parent.width - (resetBitrateButton.visible ? resetBitrateButton.width + parent.spacing : 0))
@@ -1658,92 +1658,6 @@ Flickable {
                             StreamingPreferences.videoCodecConfig = codecListModel.get(currentIndex).val
                         }
                     }
-                }
-
-                Label {
-                    width: parent.width
-                    id: rendererTitle
-                    text: qsTr("Renderer")
-                    font.pointSize: 12
-                    wrapMode: Text.Wrap
-                    visible: SystemProperties.isDarwin
-                }
-
-                AutoResizingComboBox {
-                    // ignore setting the index at first, and actually set it when the component is loaded
-                    Component.onCompleted: {
-                        var saved_rs = StreamingPreferences.rendererSelection
-
-                        // Default to Automatic
-                        currentIndex = 0
-
-                        for(var i = 0; i < rendererListModel.count; i++) {
-                            var el_rs = rendererListModel.get(i).val;
-                            if (saved_rs === el_rs) {
-                                currentIndex = i
-                                break
-                            }
-                        }
-
-                        activated(currentIndex)
-                    }
-
-                    id: rendererComboBox
-                    visible: SystemProperties.isDarwin
-                    textRole: "text"
-                    model: ListModel {
-                        id: rendererListModel
-                        ListElement {
-                            text: qsTr("Automatic (Recommended)")
-                            val: StreamingPreferences.RS_AUTO
-                        }
-                        ListElement {
-                            text: "Vulkan"
-                            val: StreamingPreferences.RS_VULKAN
-                        }
-                        ListElement {
-                            text: "Metal"
-                            val: StreamingPreferences.RS_METAL
-                        }
-                        ListElement {
-                            text: "AVSampleBufferDisplayLayer"
-                            val: StreamingPreferences.RS_AVSBDL
-                        }
-                    }
-                    // ::onActivated must be used, as it only listens for when the index is changed by a human
-                    onActivated : {
-                        StreamingPreferences.rendererSelection = rendererListModel.get(currentIndex).val
-                    }
-                }
-
-                CheckBox {
-                    id: enableYUV444
-                    width: parent.width
-                    text: qsTr("Enable YUV 4:4:4")
-                    font.pointSize: 12
-
-                    checked: StreamingPreferences.enableYUV444
-                    onCheckedChanged: {
-                        // This is called on init, so only reset to default bitrate when checked state changes.
-                        if (StreamingPreferences.enableYUV444 != checked) {
-                            StreamingPreferences.enableYUV444 = checked
-                            if (StreamingPreferences.autoAdjustBitrate) {
-                                StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
-                                                                                                          StreamingPreferences.height,
-                                                                                                          StreamingPreferences.fps,
-                                                                                                          StreamingPreferences.enableYUV444);
-                                slider.value = StreamingPreferences.bitrateKbps
-                            }
-                        }
-                    }
-
-                    ToolTip.delay: 1000
-                    ToolTip.timeout: 5000
-                    ToolTip.visible: hovered
-                    ToolTip.text: enabled ?
-                                      qsTr("Good for streaming desktop and text-heavy games, but not recommended for fast-paced games.")
-                                    :
-                                      qsTr("YUV 4:4:4 is not supported on this PC.")
                 }
 
                 CheckBox {

@@ -66,12 +66,12 @@ Column {
 
                 ListElement {
                     text: qsTr("D3D11 (recommended)")
-                    val: StreamingPreferences.RENDERER_D3D11
+                    val: StreamingPreferences.RS_D3D11
                 }
 
                 ListElement {
                     text: qsTr("Vulkan")
-                    val: StreamingPreferences.RENDERER_VULKAN
+                    val: StreamingPreferences.RS_VULKAN
                 }
             }
 
@@ -82,7 +82,7 @@ Column {
 
                 currentIndex = 0
                 for (var i = 0; i < rendererListModelWindows.count; i++) {
-                    if (StreamingPreferences.renderer === rendererListModelWindows.get(i).val) {
+                    if (StreamingPreferences.rendererSelection === rendererListModelWindows.get(i).val) {
                         currentIndex = i
                         break
                     }
@@ -92,7 +92,7 @@ Column {
             }
 
             onActivated: {
-                StreamingPreferences.renderer = rendererListModelWindows.get(currentIndex).val
+                StreamingPreferences.rendererSelection = rendererListModelWindows.get(currentIndex).val
             }
 
             ToolTip.delay: 1000
@@ -118,7 +118,7 @@ Column {
 
                 ListElement {
                     text: qsTr("Vulkan (MoltenVK)")
-                    val: StreamingPreferences.RENDERER_VULKAN
+                    val: StreamingPreferences.RS_VULKAN
                 }
 
                 ListElement {
@@ -134,7 +134,7 @@ Column {
 
                 currentIndex = 0
                 for (var i = 0; i < rendererListModelMac.count; i++) {
-                    if (StreamingPreferences.renderer === rendererListModelMac.get(i).val) {
+                    if (StreamingPreferences.rendererSelection === rendererListModelMac.get(i).val) {
                         currentIndex = i
                         break
                     }
@@ -144,7 +144,7 @@ Column {
             }
 
             onActivated: {
-                StreamingPreferences.renderer = rendererListModelMac.get(currentIndex).val
+                StreamingPreferences.rendererSelection = rendererListModelMac.get(currentIndex).val
             }
 
             ToolTip.delay: 1000
@@ -177,7 +177,7 @@ Column {
             textRole: "text"
             visible: Qt.platform.os === "osx"
             enabled: !rendererComboBoxMac.visible ||
-                     StreamingPreferences.renderer === StreamingPreferences.RS_METAL
+                     StreamingPreferences.rendererSelection === StreamingPreferences.RS_METAL
 
             model: ListModel {
                 id: rendererOptionsListModel
@@ -380,7 +380,7 @@ Column {
         Label {
             Layout.columnSpan: 2
             Layout.fillWidth: true
-            id: bitrateDesc
+            id: quickMenuDesc
             text: qsTr("Use <font color=\"skyblue\">Select+Start</font> or <font color=\"skyblue\">Ctrl+Alt+Shift+Space</font> to open the Quick Menu to show/hide stats, graphs, and other advanced controls.")
             font.pointSize: 12
             wrapMode: Text.WordWrap
@@ -407,6 +407,36 @@ Column {
                                 qsTr("The stream will be HDR-capable, but some games may require an HDR monitor on your host PC to enable HDR mode.")
                             :
                                 qsTr("HDR streaming is not supported on this PC.")
+        }
+
+        CheckBox {
+            id: enableYUV444
+            width: parent.width
+            text: qsTr("Enable YUV 4:4:4")
+            font.pointSize: 12
+
+            checked: StreamingPreferences.enableYUV444
+            onCheckedChanged: {
+                // This is called on init, so only reset to default bitrate when checked state changes.
+                if (StreamingPreferences.enableYUV444 != checked) {
+                    StreamingPreferences.enableYUV444 = checked
+                    if (StreamingPreferences.autoAdjustBitrate) {
+                        StreamingPreferences.bitrateKbps = StreamingPreferences.getDefaultBitrate(StreamingPreferences.width,
+                                                                                                    StreamingPreferences.height,
+                                                                                                    StreamingPreferences.fps,
+                                                                                                    StreamingPreferences.enableYUV444);
+                        slider.value = StreamingPreferences.bitrateKbps
+                    }
+                }
+            }
+
+            ToolTip.delay: 1000
+            ToolTip.timeout: 5000
+            ToolTip.visible: hovered
+            ToolTip.text: enabled ?
+                                qsTr("Good for streaming desktop and text-heavy games, but not recommended for fast-paced games.")
+                            :
+                                qsTr("YUV 4:4:4 is not supported on this PC.")
         }
     }
 }
