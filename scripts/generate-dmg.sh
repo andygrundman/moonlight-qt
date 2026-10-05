@@ -15,7 +15,7 @@ BUILD_ROOT=$PWD/build
 SOURCE_ROOT=$PWD
 BUILD_FOLDER=$BUILD_ROOT/build-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
-APP_BUNDLE="$BUILD_FOLDER/app/Moonlight Metal.app"
+APP_BUNDLE="$BUILD_FOLDER/app/Moonlight-Metal.app"
 
 if [ -n "$CI_VERSION" ]; then
   VERSION=$CI_VERSION
@@ -49,7 +49,8 @@ export LDFLAGS=-flto=thin
 
 echo Configuring the project
 pushd $BUILD_FOLDER
-qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64" || fail "Qmake failed!"
+# x86_64h = Haswell, AVX2, Intel Macs from 2013/2014
+qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64h arm64" || fail "Qmake failed!"
 popd
 
 echo Compiling Moonlight in $BUILD_CONFIG configuration
@@ -63,11 +64,31 @@ dsymutil "$APP_BUNDLE/Contents/MacOS/Moonlight" -o Moonlight-$VERSION.dsym || fa
 cp -R Moonlight-$VERSION.dsym $INSTALLER_FOLDER || fail "dSYM copy failed!"
 popd
 
+echo Hiding libmimer
+if [ -d "$QTDIR" ]; then
+  mv "$QTDIR/macos/plugins/sqldrivers/libqsqlmimer.dylib" "$QTDIR/macos/plugins/sqldrivers/libqsqlmimer.dylib.hide"
+fi
+
+if [ "$SIGNING_IDENTITY" != "" ]; then
+  echo Setting up entitlements
+  if [ "$MOONLIGHT_PROVISION_PROFILE" == "" ]; then
+    fail "Please set MOONLIGHT_PROVISION_PROFILE to the path to your .provisionprofile"
+  fi
+  cp $SOURCE_ROOT/app/deploy/macos/spatial-audio.entitlements "$APP_BUNDLE/Contents/Resources/spatial-audio.entitlements"
+  cp $MOONLIGHT_PROVISION_PROFILE "$APP_BUNDLE/Contents/embedded.provisionprofile"
+fi
+
 echo Creating app bundle
 EXTRA_ARGS=
 if [ "$BUILD_CONFIG" == "Debug" ]; then EXTRA_ARGS="$EXTRA_ARGS -use-debug-libs"; fi
 echo Extra deployment arguments: $EXTRA_ARGS
-macdeployqt "$APP_BUNDLE" $EXTRA_ARGS -qmldir=$SOURCE_ROOT/app/gui -appstore-compliant || fail "macdeployqt failed!"
+if [ "$SIGNING_IDENTITY" != "" ]; then
+  macdeployqt "$APP_BUNDLE" $EXTRA_ARGS -qmldir=$SOURCE_ROOT/app/gui -verbose=2 -codesign="$SIGNING_IDENTITY" -hardened-runtime -timestamp || fail "macdeployqt failed!"
+else
+  macdeployqt "$APP_BUNDLE" $EXTRA_ARGS -qmldir=$SOURCE_ROOT/app/gui -verbose=2 -no-codesign || fail "macdeployqt failed!"
+fi
+
+mv "$QTDIR/macos/plugins/sqldrivers/libqsqlmimer.dylib.hide" "$QTDIR/macos/plugins/sqldrivers/libqsqlmimer.dylib"
 
 # TODO: lots more Qt crap that can be removed
 echo Removing unused Qt cruft
@@ -90,14 +111,8 @@ echo Removing dSYM files from app bundle
 find "$APP_BUNDLE/" -name '*.dSYM' | xargs rm -rf
 
 if [ "$SIGNING_IDENTITY" != "" ]; then
-  if [ "$MOONLIGHT_PROVISION_PROFILE" == "" ]; then
-    fail "Please set MOONLIGHT_PROVISION_PROFILE to the path to your .provisionprofile"
-  fi
-  cp $SOURCE_ROOT/app/deploy/macos/spatial-audio.entitlements "$APP_BUNDLE/Contents/Resources/spatial-audio.entitlements"
-  cp $MOONLIGHT_PROVISION_PROFILE "$APP_BUNDLE/Contents/embedded.provisionprofile"
-
   echo Signing app bundle
-  codesign --force --deep --force --verify --verbose --options runtime --timestamp \
+  codesign --force --deep --verify --verbose --options runtime --timestamp \
     --entitlements "$APP_BUNDLE/Contents/Resources/spatial-audio.entitlements" \
     --sign "$SIGNING_IDENTITY" \
     "$APP_BUNDLE" || fail "Signing failed!"
@@ -117,6 +132,7 @@ else
   esac
 fi
 
+# Space in DMG filename is expected here
 if [ "$NOTARY_KEYCHAIN_PROFILE" != "" ]; then
   echo Uploading to App Notary service
   xcrun notarytool submit --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" --wait "$INSTALLER_FOLDER/Moonlight Metal.dmg" || fail "Notary submission failed"
