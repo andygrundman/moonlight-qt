@@ -632,6 +632,7 @@ macx {
     system(cp $$PWD/Info.plist $$OUT_PWD/Info.plist)
     system(sed -i -e 's/VERSION/$$cat(version.txt)/g' $$OUT_PWD/Info.plist)
 
+    QMAKE_APPLICATION_BUNDLE_NAME = "Moonlight Metal"
     QMAKE_INFO_PLIST = $$OUT_PWD/Info.plist
 
     APP_BUNDLE_RESOURCES.files = moonlight.icns

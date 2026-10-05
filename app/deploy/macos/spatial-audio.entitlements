@@ -10,5 +10,13 @@
 	<true/>
 	<key>com.apple.developer.coremotion.head-pose</key>
 	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.device.usb</key>
+	<true/>
+	<key>com.apple.security.device.bluetooth</key>
+	<true/>
 </dict>
 </plist>
