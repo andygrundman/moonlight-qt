@@ -30,6 +30,7 @@ Stats::Stats():
     m_VideoFormat(0),
     m_Width(0),
     m_Height(0),
+    m_BitrateKbps(100 * 1024),
     m_ShowGraphs {false}
 {
     SDL_zero(m_ActiveWndVideoStats);
@@ -45,6 +46,9 @@ void Stats::SetMetadata(int videoFormat, int width, int height)
     m_VideoFormat = videoFormat;
     m_Width = width;
     m_Height = height;
+
+    StreamingPreferences *prefs = StreamingPreferences::get();
+    m_BitrateKbps = prefs->bitrateKbps;
 }
 
 bool Stats::GetShowGraphs()
@@ -615,6 +619,11 @@ void Stats::RenderGraphs()
             ImPlot::SetupAxes(nullptr, nullptr, axisFlags, axisFlags);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, (double) countF - 1.0, ImGuiCond_Always);
 
+            if (i == PLOT_BANDWIDTH) {
+                scaleMin = -0.1f;
+                scaleMax = ((float)m_BitrateKbps * 1.2) / 1024.0f;
+            }
+
             float labelY = 0.0f;
             if (scaleMin != FLT_MAX && scaleMax != FLT_MAX) {
                 ImPlot::SetupAxisLimits(ImAxis_Y1, scaleMin, scaleMax, ImGuiCond_Always);
@@ -651,7 +660,7 @@ void Stats::RenderGraphs()
         ImGui::PopID();
     };
 
-    const int row1[3] = {PLOT_FRAMETIME, PLOT_DROPPED_NETWORK, PLOT_PRESENT_DELAY};
+    const int row1[3] = {PLOT_FRAMETIME, PLOT_DROPPED_NETWORK, PLOT_QUEUED_FRAMES};
     for (int c = 0; c < 3; ++c) {
         if (c > 0) {
             ImGui::SameLine(0.0f, itemSpacingX);

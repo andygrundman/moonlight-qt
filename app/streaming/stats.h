@@ -85,5 +85,6 @@ class Stats
 	int m_VideoFormat;
 	int m_Width;
 	int m_Height;
+    int m_BitrateKbps;
     bool m_ShowGraphs;
 };
