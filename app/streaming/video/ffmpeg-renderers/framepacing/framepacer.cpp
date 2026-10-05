@@ -621,12 +621,11 @@ void FramePacer::submitFrame(AVFrame* frame, PDECODE_UNIT du)
 
     // Sometimes a frame will be dequeued right away, causing count() to be 0.
     // Use min of 1.0 for a nicer graph.
-    //int count = std::max((int)FrameQueue::instance().count(), 1);
-    float avgQueueDepth = FrameQueue::instance().countAverage();
+    int count = std::max((int)FrameQueue::instance().count(), 1);
 
     ImGuiPlots::instance().observeFloat(PLOT_DROPPED_PACER, (float) dropCount);
-    ImGuiPlots::instance().observeFloat(PLOT_QUEUED_FRAMES, avgQueueDepth);
-    Stats::instance().SubmitAvgQueueSize(avgQueueDepth);
+    float avgQueueSize = ImGuiPlots::instance().observeFloatReturnAvg(PLOT_QUEUED_FRAMES, (float)count);
+    Stats::instance().SubmitAvgQueueSize(avgQueueSize);
 
     if (m_RenderThread == nullptr) {
         SDL_Event event;
