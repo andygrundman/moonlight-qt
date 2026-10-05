@@ -114,13 +114,9 @@ void Path::initialize(bool portable)
         s_CacheDir = QDir::currentPath() + "/cache";
     }
     else {
-#ifdef Q_OS_DARWIN
-        // On macOS, $TMPDIR is some random folder under /var/folders/ that nobody can
-        // easily find, so use the system's global tmp directory instead.
-        s_LogDir = "/tmp";
-#else
+        // On macOS, use the app's temporary directory ($TMPDIR) so logging also
+        // works with App Sandbox, which may deny writes to the global /tmp.
         s_LogDir = QDir::tempPath();
-#endif
         s_CacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
         s_BoxArtCacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/boxart";
         s_QmlCacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/qmlcache";

@@ -14,6 +14,11 @@
 #include <QTemporaryFile>
 #include <QRegularExpression>
 
+#ifdef Q_OS_DARWIN
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
 #include <signal.h>
@@ -60,11 +65,9 @@
 
 // Log to file or console dynamically for Windows builds
 #define LOG_TO_FILE
-#elif !defined(QT_DEBUG) && defined(Q_OS_DARWIN)
-// Log to file for release Mac builds
+#elif defined(Q_OS_DARWIN)
+// Log to file or stderr dynamically for both debug and release Mac builds
 #define LOG_TO_FILE
-#else
-// Log to console for debug Mac builds
 #endif
 
 // StreamUtils::setAsyncLogging() exposes control of this to the Session
@@ -85,6 +88,21 @@ static QRegularExpression k_RikeyIdRegex("&rikeyid=[\\d-]+");
 static const uint64_t k_MaxLogSizeBytes = 10 * 1024 * 1024;
 static QAtomicInteger<uint64_t> s_LogBytesWritten = 0;
 static QFile* s_LoggerFile;
+#endif
+
+#ifdef Q_OS_DARWIN
+static bool hasUsableStderr()
+{
+    struct stat stderrInfo;
+    if (fstat(fileno(stderr), &stderrInfo) != 0) {
+        return false;
+    }
+
+    struct stat nullInfo;
+    return !S_ISCHR(stderrInfo.st_mode) ||
+           stat("/dev/null", &nullInfo) != 0 ||
+           stderrInfo.st_rdev != nullInfo.st_rdev;
+}
 #endif
 
 #ifdef HAVE_DRM_MASTER_HOOKS
@@ -133,13 +151,15 @@ void logToLoggerStream(QString& message)
     message.replace(k_RikeyIdRegex, "&rikeyid=REDACTED");
 
 #ifdef LOG_TO_FILE
-    auto oldLogSize = s_LogBytesWritten.fetchAndAddRelaxed(message.size());
-    if (oldLogSize >= k_MaxLogSizeBytes) {
-        return;
-    }
-    else if (oldLogSize >= k_MaxLogSizeBytes - message.size()) {
-        // Write one final message
-        message = "Log size limit reached!";
+    if (s_LoggerFile != nullptr) {
+        auto oldLogSize = s_LogBytesWritten.fetchAndAddRelaxed(message.size());
+        if (oldLogSize >= k_MaxLogSizeBytes) {
+            return;
+        }
+        else if (oldLogSize >= k_MaxLogSizeBytes - message.size()) {
+            // Write one final message
+            message = "Log size limit reached!";
+        }
     }
 #endif
 
@@ -471,12 +491,20 @@ int main(int argc, char *argv[])
 #ifdef Q_OS_WIN32
     // Only log to a file if the user didn't redirect stderr somewhere else
     if (IS_UNSPECIFIED_HANDLE(oldConErr))
+#elif defined(Q_OS_DARWIN)
+    if (!hasUsableStderr())
 #endif
     {
         s_LoggerFile = new QFile(tempDir.filePath(QString("Moonlight-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
         if (s_LoggerFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream(stderr) << "Redirecting log output to " << s_LoggerFile->fileName() << Qt::endl;
             s_LoggerStream.setDevice(s_LoggerFile);
+        }
+        else {
+            QTextStream(stderr) << "Failed to open log file " << s_LoggerFile->fileName()
+                                << ": " << s_LoggerFile->errorString() << Qt::endl;
+            delete s_LoggerFile;
+            s_LoggerFile = nullptr;
         }
     }
 #endif
@@ -505,11 +533,13 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef LOG_TO_FILE
-    // Prune the oldest existing logs if there are more than 10
-    QStringList existingLogNames = tempDir.entryList(QStringList("Moonlight-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
-    for (int i = 10; i < existingLogNames.size(); i++) {
-        qInfo() << "Removing old log file:" << existingLogNames.at(i);
-        QFile(tempDir.filePath(existingLogNames.at(i))).remove();
+    if (s_LoggerFile != nullptr) {
+        // Prune the oldest existing logs if there are more than 10
+        QStringList existingLogNames = tempDir.entryList(QStringList("Moonlight-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
+        for (int i = 10; i < existingLogNames.size(); i++) {
+            qInfo() << "Removing old log file:" << existingLogNames.at(i);
+            QFile(tempDir.filePath(existingLogNames.at(i))).remove();
+        }
     }
 #endif
 
