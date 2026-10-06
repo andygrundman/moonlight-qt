@@ -12,8 +12,6 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
-	<key>com.apple.developer.networking.multicast</key>
-	<true/>
 	<key>com.apple.security.device.usb</key>
 	<true/>
 	<key>com.apple.security.device.bluetooth</key>
