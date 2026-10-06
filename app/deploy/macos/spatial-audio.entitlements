@@ -12,9 +12,15 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
 	<key>com.apple.security.device.usb</key>
 	<true/>
 	<key>com.apple.security.device.bluetooth</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Logs/Moonlight/</string>
+	</array>
 </dict>
 </plist>

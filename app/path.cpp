@@ -6,6 +6,11 @@
 #include <QSettings>
 #include <QCoreApplication>
 
+#ifdef Q_OS_DARWIN
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
 QString Path::s_CacheDir;
 QString Path::s_LogDir;
 QString Path::s_BoxArtCacheDir;
@@ -114,9 +119,24 @@ void Path::initialize(bool portable)
         s_CacheDir = QDir::currentPath() + "/cache";
     }
     else {
-        // On macOS, use the app's temporary directory ($TMPDIR) so logging also
-        // works with App Sandbox, which may deny writes to the global /tmp.
         s_LogDir = QDir::tempPath();
+#ifdef Q_OS_DARWIN
+        // We're running in a sandbox so it's a bit more work to get the home directory
+        const struct passwd* user = getpwuid(getuid());
+        if (user != nullptr && user->pw_dir != nullptr && user->pw_dir[0] != '\0') {
+            const QString logDir = QDir(QFile::decodeName(user->pw_dir)).filePath("Library/Logs/Moonlight");
+            if (QDir().mkpath(logDir)) {
+                s_LogDir = logDir;
+            }
+            else {
+                qWarning() << "Unable to create log directory:" << logDir
+                           << "- using temporary directory:" << s_LogDir;
+            }
+        }
+        else {
+            qWarning() << "Unable to resolve the user home directory - using temporary directory:" << s_LogDir;
+        }
+#endif
         s_CacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
         s_BoxArtCacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/boxart";
         s_QmlCacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/qmlcache";
